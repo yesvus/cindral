@@ -1,4 +1,4 @@
-"""GitHub webhook verification and push-event parsing.
+"""GitHub webhook verification and event parsing.
 
 Kept separate from the HTTP handler so the cryptography and the payload shape
 can be tested without binding a socket.
@@ -32,6 +32,28 @@ class PushEvent:
         # refs/keep-alive style refs are not dispatchable
         prefix = "refs/heads/"
         return self.ref[len(prefix):] if self.ref.startswith(prefix) else ""
+
+
+@dataclass(frozen=True)
+class PullRequestEvent:
+    repository: str
+    private: bool
+    default_branch: str
+    number: int
+    action: str
+    author_association: str
+
+    @property
+    def ref(self) -> str:
+        return f"refs/pull/{self.number}/merge"
+
+    @property
+    def trusted(self) -> bool:
+        return self.author_association in {"OWNER", "MEMBER", "COLLABORATOR"}
+
+    @property
+    def should_route(self) -> bool:
+        return self.action in {"opened", "reopened", "synchronize", "ready_for_review"}
 
 
 def sign(secret: str, body: bytes) -> str:
@@ -73,4 +95,37 @@ def parse_push_event(body: bytes) -> PushEvent:
         ref=ref,
         after=after,
         default_branch=default_branch,
+    )
+
+
+def parse_pull_request_event(body: bytes) -> PullRequestEvent:
+    try:
+        payload: Any = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise WebhookError("body is not valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise WebhookError("body is not a JSON object")
+    repository = payload.get("repository")
+    if not isinstance(repository, dict) or not isinstance(repository.get("full_name"), str):
+        raise WebhookError("payload has no repository.full_name")
+    default_branch = repository.get("default_branch")
+    if not isinstance(default_branch, str) or not default_branch:
+        raise WebhookError("payload has no repository.default_branch")
+    pull_request = payload.get("pull_request")
+    if not isinstance(pull_request, dict):
+        raise WebhookError("payload has no pull_request")
+    number = payload.get("number")
+    if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+        raise WebhookError("payload has an invalid pull request number")
+    action = payload.get("action")
+    author_association = pull_request.get("author_association")
+    if not isinstance(action, str) or not isinstance(author_association, str):
+        raise WebhookError("payload has no pull request action or author association")
+    return PullRequestEvent(
+        repository=repository["full_name"],
+        private=bool(repository.get("private")),
+        default_branch=default_branch,
+        number=number,
+        action=action,
+        author_association=author_association,
     )
