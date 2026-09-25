@@ -1,0 +1,32 @@
+{
+  "runners": [
+    {
+      "name": "server",
+      "status": "online",
+      "busy": false,
+      "healthy": true,
+      "labels": ["self-hosted", "Linux", "ARM64", "server", "fallback"]
+    },
+    {
+      "name": "desktop",
+      "status": "online",
+      "busy": false,
+      "healthy": true,
+      "labels": ["self-hosted", "Linux", "ARM64", "desktop", "device"]
+    },
+    {
+      "name": "laptop",
+      "status": "online",
+      "busy": false,
+      "healthy": true,
+      "labels": ["self-hosted", "Linux", "ARM64", "laptop", "device"]
+    },
+    {
+      "name": "burst-node",
+      "status": "online",
+      "busy": false,
+      "healthy": true,
+      "labels": ["self-hosted", "Linux", "ARM64", "burst", "burst"]
+    }
+  ]
+}
