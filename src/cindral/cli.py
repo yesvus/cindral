@@ -3,8 +3,11 @@ import argparse
 import json
 import os
 from pathlib import Path
+import socket
 import sys
 
+from .agent import Agent, CindralClient
+from .executor import DockerExecutor
 from .github import GitHubAPIError, GitHubClient, is_repository_slug
 from .models import RouteRequest
 from .onboarding import check_lane_readiness, validate_adapter
@@ -41,7 +44,46 @@ def main() -> None:
     service.add_argument("--port", type=int, default=8095)
     service.add_argument("--github-token-env", default="GITHUB_TOKEN")
 
+    agent = subparsers.add_parser("agent")
+    agent.add_argument("--url", default=os.environ.get("CINDRAL_BROKER_URL", "http://127.0.0.1:8095"))
+    agent.add_argument("--token-env", default="CINDRAL_AGENT_TOKEN")
+    agent.add_argument("--device", default=os.environ.get("CINDRAL_DEVICE") or socket.gethostname())
+    agent.add_argument("--labels", default=os.environ.get("CINDRAL_AGENT_LABELS", ""))
+    agent.add_argument("--workspace", default=os.environ.get("CINDRAL_AGENT_WORKSPACE", "/var/lib/cindral/work"))
+    agent.add_argument("--log-dir", default=os.environ.get("CINDRAL_AGENT_LOG_DIR", ""))
+    agent.add_argument("--docker", default=os.environ.get("CINDRAL_AGENT_DOCKER", "docker"))
+    agent.add_argument("--github-token-env", default="GITHUB_TOKEN")
+    agent.add_argument("--lease-seconds", type=int, default=int(os.environ.get("CINDRAL_JOB_LEASE_SECONDS", "300")))
+    agent.add_argument("--idle-seconds", type=float, default=float(os.environ.get("CINDRAL_AGENT_IDLE_SECONDS", "15")))
+    agent.add_argument("--once", action="store_true")
+
     args = parser.parse_args()
+    if args.command == "agent":
+        token = os.environ.get(args.token_env)
+        if not token:
+            parser.error(f"set {args.token_env} to the broker's agent token")
+        labels = tuple(label for label in (part.strip() for part in args.labels.split(",")) if label)
+        executor = DockerExecutor(
+            token=os.environ.get(args.github_token_env),
+            workspace_root=args.workspace,
+            log_dir=args.log_dir or None,
+            docker=args.docker,
+        )
+        runner = Agent(
+            CindralClient(args.url, token),
+            args.device,
+            executor,
+            labels=labels,
+            lease_seconds=args.lease_seconds,
+            idle_seconds=args.idle_seconds,
+        )
+        print(f"cindral agent {args.device} on {args.url}")
+        if args.once:
+            runner.run_once()
+        else:
+            runner.serve_forever()
+        return
+
     if args.command == "serve":
         serve(args.policy, args.state, args.host, args.port, os.environ.get(args.github_token_env))
         return
