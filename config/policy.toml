@@ -8,7 +8,7 @@ paid_overage = "deny"
 unknown_quota = "local"
 
 [local]
-priority = ["fallback", "device"]
+priority = ["fallback"]
 device_priority = ["desktop", "laptop", "phone"]
 
 # Lane labels are matched against the runners registered to the repository the

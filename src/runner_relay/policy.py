@@ -77,6 +77,11 @@ class Policy:
         labels = self.lane_labels.get(lane)
         if labels is None:
             raise RouteUnavailable(f"unknown lane: {lane}")
+        if lane == "device":
+            if not request.target:
+                raise RouteUnavailable("device lane requires an explicit target")
+            if request.target not in self.device_priority:
+                raise RouteUnavailable(f"unknown device target: {request.target}")
         required = set(labels)
         if lane == "device" and request.target:
             required.add(request.target)
@@ -94,6 +99,8 @@ class Policy:
 
     def _first_local(self, request: RouteRequest, runners: tuple[Runner, ...], reason: str) -> RouteDecision:
         for lane in self.local_priority:
+            if lane == "device":
+                continue
             try:
                 decision = self._explicit_lane(
                     RouteRequest(requested_lane=lane, target=request.target),
