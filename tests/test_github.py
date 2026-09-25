@@ -66,7 +66,7 @@ class GitHubClientTest(unittest.TestCase):
         self.assertIn("/hooks?per_page=100&page=1", listing.full_url)
         self.assertEqual(create.get_method(), "POST")
         payload = json.loads(create.data)
-        self.assertEqual(payload["events"], ["push"])
+        self.assertEqual(payload["events"], ["push", "pull_request"])
         self.assertEqual(payload["config"]["secret"], "secret-value")
         self.assertEqual(payload["config"]["insecure_ssl"], "0")
 

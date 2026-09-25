@@ -10,14 +10,20 @@ import shlex
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import TextIO
 
 from .agent import JobSpec
-from .contract import CONTRACT_PATH, Contract, ContractError
+from .contract import CONTRACT_PATH, Contract, ContractError, Service
 from .models import ExecutionResult
 
 MAX_LOG_CHARS = 64 * 1024
+
+DOCKER_SOCKET = "/var/run/docker.sock"
+DOCKER_PLUGIN_DIRS = ("/usr/libexec/docker/cli-plugins", "/usr/local/lib/docker/cli-plugins")
+SERVICE_HEALTH_TIMEOUT = 90
+SERVICE_HEALTH_POLL_SECONDS = 2
 
 
 class ExecutorError(RuntimeError):
@@ -88,6 +94,20 @@ class ProcessRunner:
         code = self.run(argv, log, env=env, cwd=cwd, cancel=cancel)
         if code != 0:
             raise ExecutorError(f"command failed (exit {code}): {' '.join(argv)}")
+
+    def capture(self, argv: list[str]) -> tuple[int, str]:
+        """Runs a short command and returns its exit code and output."""
+        try:
+            completed = subprocess.run(
+                argv,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                text=True,
+            )
+        except OSError as exc:
+            return 127, str(exc)
+        return completed.returncode, completed.stdout or ""
 
 
 class DockerExecutor:
@@ -204,21 +224,38 @@ class DockerExecutor:
         log: TextIO,
         cancel: threading.Event,
     ) -> int:
+        docker_cli = self._docker_cli(contract)
         network = f"cindral-{job.id}"
         # one container per job, so installs persist across steps the way they
         # do in a single CI job; the checkout is mounted from the workspace
         (workspace / "run.sh").write_text(self._script(contract.steps))
         services: list[str] = []
+        unhealthy: list[tuple[str, Service]] = []
         self.runner.check([self.docker, "network", "create", network], log, cancel=cancel)
         try:
             for service in contract.services:
                 name = f"{network}-{service.name}"
                 argv = [self.docker, "run", "-d", "--name", name, "--network", network, "--network-alias", service.name]
+                if service.health_cmd:
+                    argv += [
+                        "--health-cmd",
+                        service.health_cmd,
+                        "--health-interval",
+                        "2s",
+                        "--health-timeout",
+                        "5s",
+                        "--health-retries",
+                        "30",
+                    ]
                 for key, value in service.env.items():
                     argv += ["-e", f"{key}={value}"]
                 argv += [service.image, *service.command]
                 self.runner.check(argv, log, cancel=cancel)
                 services.append(name)
+                if service.health_cmd:
+                    unhealthy.append((name, service))
+            if not self._wait_for_services(unhealthy, log, cancel):
+                return 130
             argv = [
                 self.docker,
                 "run",
@@ -235,6 +272,7 @@ class DockerExecutor:
                 f"CINDRAL_JOB_ID={job.id}",
                 "-e",
                 "CI=true",
+                *docker_cli,
             ]
             for key, value in contract.env.items():
                 argv += ["-e", f"{key}={value}"]
@@ -245,6 +283,62 @@ class DockerExecutor:
             for name in services:
                 self.runner.run([self.docker, "rm", "-f", name], log)
             self.runner.run([self.docker, "network", "rm", network], log)
+
+    def _docker_cli(self, contract: Contract) -> list[str]:
+        """Socket and CLI mounts for contracts whose steps build or run images."""
+        if not contract.docker:
+            return []
+        socket = Path(DOCKER_SOCKET)
+        if not socket.exists():
+            raise ExecutorError(f"contract requests docker but {DOCKER_SOCKET} is missing")
+        binary = shutil.which(self.docker)
+        if binary is None:
+            raise ExecutorError(f"contract requests docker but {self.docker} is not on PATH")
+        resolved = str(Path(binary).resolve())
+        mounts = [
+            "-v",
+            f"{socket}:{socket}",
+            "--group-add",
+            str(socket.stat().st_gid),
+            "-v",
+            f"{resolved}:{resolved}:ro",
+        ]
+        for directory in DOCKER_PLUGIN_DIRS:
+            path = Path(directory)
+            if path.is_dir():
+                mounts += ["-v", f"{path}:{path}:ro"]
+        return mounts
+
+    def _wait_for_services(
+        self,
+        waiting: list[tuple[str, Service]],
+        log: TextIO,
+        cancel: threading.Event,
+    ) -> bool:
+        if not waiting:
+            return True
+        for _, service in waiting:
+            log.write(f"cindral: waiting for {service.name} to become healthy\n")
+        deadline = time.monotonic() + SERVICE_HEALTH_TIMEOUT
+        pending = waiting
+        while pending:
+            remaining: list[tuple[str, Service]] = []
+            for name, service in pending:
+                code, status = self.runner.capture(
+                    [self.docker, "inspect", "--format", "{{.State.Health.Status}}", name]
+                )
+                if code != 0 or status.strip() != "healthy":
+                    remaining.append((name, service))
+            if not remaining:
+                return True
+            if cancel.is_set():
+                return False
+            if time.monotonic() >= deadline:
+                names = ", ".join(service.name for _, service in remaining)
+                raise ExecutorError(f"services did not become healthy within {SERVICE_HEALTH_TIMEOUT}s: {names}")
+            pending = remaining
+            time.sleep(SERVICE_HEALTH_POLL_SECONDS)
+        return True
 
     def _script(self, steps: tuple[str, ...]) -> str:
         lines = ["set -e"]

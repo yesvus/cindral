@@ -26,6 +26,10 @@ ref = "node:22-bookworm"
 # or build from the repository:
 # dockerfile = ".cindral/Dockerfile"
 
+[runner]
+# mount the host Docker daemon for steps that build or run images
+docker = true
+
 [env]
 NODE_VERSION = "22"
 
@@ -33,6 +37,7 @@ NODE_VERSION = "22"
 name = "postgres"
 image = "pgvector/pgvector:pg16"
 env = { POSTGRES_USER = "postgres", POSTGRES_PASSWORD = "postgres" }
+health_cmd = "pg_isready -U postgres"
 
 [[steps]]
 run = "pnpm install --frozen-lockfile"
@@ -42,11 +47,17 @@ run = "pnpm run ci"
 ```
 
 - `[image]` sets exactly one of `ref` (pull) or `dockerfile` (build the checkout).
+- `[runner].docker` mounts the daemon socket and the Docker CLI into the job
+  container, so a step can build or run images on the device. The socket is
+  root-equivalent on the device, so this is for trusted repositories only.
+  The contract fails before any step when the socket is absent.
 - `[[steps]]` run in order, each with `/bin/sh -lc` in a container, working
   directory `/workspace` bound to the checkout. The first non-zero step fails
   the job and the remaining steps are skipped.
 - `[env]` is passed to every step. `[[services]]` start first on an isolated
   network and are reachable by their `name` alias, then removed with the network.
+  A service `health_cmd` holds the steps until the service reports healthy, up
+  to 90 seconds.
 - `timeout_minutes` bounds the job when lower than the broker default.
 
 ## Device agent
