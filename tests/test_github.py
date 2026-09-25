@@ -127,6 +127,39 @@ class GitHubClientTest(unittest.TestCase):
         with self.assertRaises(GitHubAPIError):
             GitHubClient("token").list_runners("example-org/example-app")
 
+    @patch("cindral.github.urlopen")
+    def test_post_status_uses_statuses_api(self, urlopen) -> None:
+        urlopen.return_value = Response()
+        GitHubClient("token").post_status(
+            "yesvus/leotron-yesvus", "abc123", "success", "ci passed", target_url="https://relay.example/run/1"
+        )
+        request = urlopen.call_args.args[0]
+        self.assertEqual(
+            request.full_url,
+            "https://api.github.com/repos/yesvus/leotron-yesvus/statuses/abc123",
+        )
+        self.assertEqual(request.get_method(), "POST")
+        payload = json.loads(request.data)
+        self.assertEqual(payload["state"], "success")
+        self.assertEqual(payload["context"], "cindral/ci")
+        self.assertEqual(payload["target_url"], "https://relay.example/run/1")
+
+    def test_post_status_rejects_invalid_state_and_repository(self) -> None:
+        with self.assertRaises(ValueError):
+            GitHubClient("token").post_status("yesvus/waymux", "abc123", "done")
+        with self.assertRaises(ValueError):
+            GitHubClient("token").post_status("../repo", "abc123", "success")
+        with self.assertRaises(ValueError):
+            GitHubClient("token").post_status("yesvus/waymux", "", "success")
+
+    @patch("cindral.github.urlopen")
+    def test_post_status_surfaces_github_errors(self, urlopen) -> None:
+        from urllib.error import HTTPError
+
+        urlopen.side_effect = HTTPError("url", 403, "forbidden", {}, None)
+        with self.assertRaises(GitHubAPIError):
+            GitHubClient("token").post_status("yesvus/waymux", "abc123", "failure")
+
 
 if __name__ == "__main__":
     unittest.main()
