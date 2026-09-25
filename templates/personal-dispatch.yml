@@ -38,12 +38,8 @@ jobs:
 
   fallback:
     if: inputs.relay_lane == 'fallback'
-    # No class label. GitHub scopes self-hosted runners to one repository, and
-    # the runner registered here is named per repository, so a "fallback" label
-    # matches nothing outside the one repository that happens to use it. The
-    # three labels below are the ones every self-hosted runner on this account
-    # actually carries.
-    runs-on: [self-hosted, Linux, ARM64]
+    # The custom label keeps device-only runners out of the fallback lane.
+    runs-on: [self-hosted, Linux, ARM64, fallback]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
