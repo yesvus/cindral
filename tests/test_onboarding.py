@@ -37,6 +37,10 @@ class OnboardingTest(unittest.TestCase):
         type: string
       relay_reason:
         type: string
+      relay_ref:
+        required: false
+        type: string
+        default: ""
 permissions:
   contents: read
 concurrency:
