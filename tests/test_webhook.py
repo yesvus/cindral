@@ -108,7 +108,11 @@ class WebhookEndpointTest(unittest.TestCase):
             list_runners = self.server.github.list_runners
             if isinstance(list_runners.return_value, MagicMock) and list_runners.side_effect is None:
                 list_runners.return_value = (
-                    RepositoryRunner("papyrus-helmdeck-web", "online", ("self-hosted", "Linux", "ARM64")),
+                    RepositoryRunner(
+                        "papyrus-helmdeck-web",
+                        "online",
+                        ("self-hosted", "Linux", "ARM64", "fallback"),
+                    ),
                 )
         conn = HTTPConnection("127.0.0.1", self.port, timeout=10)
         conn.request("POST", path, body=body, headers={"Content-Type": "application/json", **headers})
@@ -191,7 +195,7 @@ class WebhookEndpointTest(unittest.TestCase):
         runner = RepositoryRunner(
             "papyrus-helmdeck-web",
             "online",
-            ("self-hosted", "Linux", "ARM64", "burst"),
+            ("self-hosted", "Linux", "ARM64", "fallback", "burst"),
         )
         burst_payload = json.dumps(
             {
@@ -284,7 +288,11 @@ class WebhookEndpointTest(unittest.TestCase):
 
         with patch.object(self.server, "github") as github:
             github.list_runners.return_value = (
-                RepositoryRunner("papyrus-helmdeck-web", "online", ("self-hosted", "Linux", "ARM64")),
+                RepositoryRunner(
+                    "papyrus-helmdeck-web",
+                    "online",
+                    ("self-hosted", "Linux", "ARM64", "fallback"),
+                ),
             )
             requests = [threading.Thread(target=dispatch) for _ in range(2)]
             for request in requests:
@@ -301,8 +309,16 @@ class WebhookEndpointTest(unittest.TestCase):
         headers = {"X-Hub-Signature-256": sign(SECRET, body), "X-GitHub-Event": "push"}
         with patch.object(self.server, "github") as github:
             github.list_runners.return_value = (
-                RepositoryRunner("papyrus-helmdeck-web", "online", ("self-hosted", "Linux", "ARM64")),
-                RepositoryRunner("rover-helmdeck-web", "online", ("self-hosted", "Linux", "ARM64")),
+                RepositoryRunner(
+                    "papyrus-helmdeck-web",
+                    "online",
+                    ("self-hosted", "Linux", "ARM64", "fallback"),
+                ),
+                RepositoryRunner(
+                    "rover-helmdeck-web",
+                    "online",
+                    ("self-hosted", "Linux", "ARM64", "fallback"),
+                ),
             )
             status_a, payload_a = self.post(WEBHOOK_PATH, body, headers)
             status_b, payload_b = self.post(WEBHOOK_PATH, body, headers)
