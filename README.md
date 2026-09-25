@@ -1,109 +1,40 @@
 # Cindral
 
-Quota-aware GitHub Actions routing across GitHub-hosted and self-hosted runners.
+Cindral is a smart resource allocator for CI. It places each job on the best
+available resource - GitHub-hosted runners or your own device pool - from policy,
+quota, and live capacity.
 
-Cindral chooses an execution lane before repository code runs. GitHub-hosted runners are preferred while quota is available. Local runners are selected only when the request is eligible, the quota policy allows fallback, and a healthy idle runner exists.
+## How it allocates
 
-## Policy
+- Public repositories, and private ones with available quota, use GitHub-hosted runners.
+- Private repositories with exhausted or unknown quota use a healthy idle device.
+- `device`, `burst`, and `fallback` lanes give explicit placement to selected work.
+- Placement reads live runner capacity and busy state, then reserves the slot before the job starts.
+- A failed test never triggers a rerun on another resource.
 
-The default policy is in [`config/policy.toml`](config/policy.toml). Package-manager detection and repository integration rules are documented in [`docs/package-manager-policy.md`](docs/package-manager-policy.md) and [`docs/repository-integration.md`](docs/repository-integration.md).
+The policy engine is deterministic, takes runner state as data, and never executes repository code or stores credentials.
 
-- Public repositories use hosted runners.
-- Private repositories use hosted runners while quota is explicitly available.
-- Exhausted or unknown private-repository quota selects the first healthy local fallback.
-- Explicit `device`, `burst`, and `fallback` lanes are supported.
-- Before local dispatch, Cindral checks the target repository's live runner registrations and busy state, then reserves capacity while GitHub assigns the job.
-- Ordinary test failures never trigger a rerun on another runner.
+## Two ways to run
 
-The policy engine is deterministic and receives runner state as data. It does not execute repository code and does not store credentials.
+**Dispatch adapter** - a repository-local `workflow_dispatch` adapter ([`templates/personal-dispatch.yml`](templates/personal-dispatch.yml)) lets Cindral select the lane and hand the job to GitHub Actions.
+
+**Direct execution** - a repository declares its CI in a committed [`.cindral/ci.toml`](docs/direct-execution.md). Cindral queues the job, a device agent runs it in bounded Docker, and the result is reported as a `cindral/ci` commit status. Default-branch pushes and trusted same-repository pull requests take this path; fork and untrusted pull requests stay on the hosted lane.
 
 ## Service
 
-The service exposes:
+`GET /healthz`, `POST /v1/route`, `POST /v1/dispatch`. A routing request carries a lane, target, visibility, quota status, and time estimate; the response carries the chosen lane, runner labels, and the reason.
 
-- `GET /healthz`
-- `POST /v1/route`
-- `POST /v1/dispatch`
+## Configuration
 
-The route request accepts:
+- [`config/policy.toml`](config/policy.toml) - lanes, quota rules, device priority.
+- [docs/direct-execution.md](docs/direct-execution.md) - contract schema, agent flags, broker settings.
+- [docs/package-manager-policy.md](docs/package-manager-policy.md), [docs/repository-integration.md](docs/repository-integration.md) - repository rules.
 
-```json
-{
-  "requested_lane": "auto",
-  "target": null,
-  "repository_visibility": "private",
-  "quota_status": "available",
-  "remaining_minutes": 120,
-  "estimated_minutes": 20
-}
-```
+## Boundaries
 
-The response contains a JSON runner label array:
-
-```json
-{
-  "lane": "hosted",
-  "runs_on": ["ubuntu-24.04"],
-  "reason": "hosted quota is available",
-  "runner": null
-}
-```
-
-## Personal-account dispatch
-
-This installation uses a personal GitHub account, not an organization. Cindral therefore uses a repository-local `workflow_dispatch` adapter. The k3s broker chooses the lane before dispatching the workflow.
-
-Start from [`templates/personal-dispatch.yml`](templates/personal-dispatch.yml), replace `./scripts/ci` with the repository's real pnpm or npm command, and keep the fixed lane jobs. Cindral adds `cindral_lane`, `cindral_target`, `cindral_reason`, and `cindral_ref` to the dispatch inputs. For PR dispatches the workflow runs from the repository's default branch and checks out the PR merge ref separately.
-
-The broker calls:
-
-```text
-POST /v1/dispatch
-```
-
-with the target repository, workflow filename, ref, and repository-specific inputs. The broker requires a GitHub token for dispatching, supplied through a k3s Secret.
-
-No organization runner group or cross-repository runner scope is required. Repository-scoped runner registrations are managed separately.
-
-## Direct execution
-
-Repositories listed in `CINDRAL_DIRECT_REPOSITORIES` run their CI on the device
-pool instead of dispatching the Actions adapter. The repository declares its
-commands in a committed [`.cindral/ci.toml`](docs/direct-execution.md); a signed
-push to the default branch enqueues a job, a trusted same-repository pull
-request enqueues one on its merge commit, and a device agent runs it in bounded
-Docker. No GitHub Actions runner is involved.
-
-Trust boundary: only pull requests whose head repository is the target
-repository, whose author is an owner/member/collaborator, and that are not
-drafts run on the device pool. Fork and untrusted pull requests stay on the
-hosted lane.
-
-Start an agent on a device:
-
-```sh
-CINDRAL_AGENT_TOKEN=... GITHUB_TOKEN=... cindral agent --url https://hook.yesvus.com
-```
-
-See [docs/direct-execution.md](docs/direct-execution.md) for the contract schema, agent flags, and broker configuration. The agent loop is in `src/cindral/agent.py`; execution is injected as a callable, so the Docker executor is wired in without changing the loop.
-
-## Repository boundaries
-
-- `cindral` owns policy, broker code, dispatch templates, and tests.
-- `ops` owns the k3s deployment, resource limits, monitoring, and alerts.
-- the host inventory owns host identity, hardware metadata, and inventory tags.
-- GitHub repository-scoped runner registrations are managed by the broker.
-
-## Versioning
-
-`VERSION` is the release source of truth and must match `pyproject.toml`. Prepare a semver bump locally:
-
-```sh
-python scripts/release.py patch
-python scripts/release.py patch --write
-```
-
-The tool does not push commits or tags. Review the diff, commit it, tag it with the matching `vX.Y.Z` value, and publish the release after the k3s image digest has been updated and verified.
+- `cindral` owns policy, broker, agent, templates, and tests.
+- `ops` owns the deployment, resource limits, monitoring, and alerts.
+- The host inventory owns device identity, hardware metadata, and tags.
 
 ## Development
 
@@ -112,4 +43,4 @@ python -m unittest discover -s tests -v
 python -m cindral.cli route --policy config/policy.toml --state examples/state.json --request examples/request.json
 ```
 
-The current implementation is the policy and service foundation. Live GitHub quota collection, host inventory and Beszel state ingestion, repository-scoped runner registration, and automatic repository migration are activation steps that belong in the Ops deployment and rollout plan.
+`VERSION` matches `pyproject.toml`; `scripts/release.py patch --write` prepares a bump, and the release is tagged after the deployment digest is verified.
