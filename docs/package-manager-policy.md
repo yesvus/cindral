@@ -69,6 +69,23 @@ npm test
 npm run build
 ```
 
+## Android PRoot hosts
+
+Android Termux hosts may have Corepack installed without a `pnpm` shim in `PATH`. Verify both the host and the Ubuntu guest before assigning pnpm work:
+
+```sh
+pnpm --version
+proot-distro login ubuntu -- bash -lc 'pnpm --version'
+```
+
+If the shim is missing, enable it in Termux:
+
+```sh
+corepack enable pnpm
+```
+
+Termux's `bin` directory is shared into the PRoot guest, so the guest should then resolve the same shim. The repository's `packageManager` field remains the version authority. A global `pnpm --version` result is only a bootstrap check, not a substitute for a repository smoke test.
+
 ## Migration rule
 
 A package-manager migration is a repository change. It requires:
