@@ -1,0 +1,9 @@
+# .cindral/ci.toml
+[image]
+ref = "python:3.12-bookworm"
+
+[[steps]]
+run = "pip install --quiet -e ."
+
+[[steps]]
+run = "python -m unittest discover -s tests"

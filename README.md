@@ -67,25 +67,15 @@ No organization runner group or cross-repository runner scope is required. Repos
 
 ## Direct execution
 
-Repositories listed in `CINDRAL_DIRECT_REPOSITORIES` run on the device pool instead of dispatching the Actions adapter. A signed push to the default branch enqueues a job, posts a `pending` commit status, and waits for a device agent to claim it.
+Repositories listed in `CINDRAL_DIRECT_REPOSITORIES` run their CI on the device pool instead of dispatching the Actions adapter. The repository declares its commands in a committed [`.cindral/ci.toml`](docs/direct-execution.md); a signed push to the default branch enqueues a job, posts a `pending` `cindral/ci` status, and a device agent runs it in bounded Docker.
 
-Agents use:
+Start an agent on a device:
 
-- `POST /v1/jobs/claim`
-- `POST /v1/jobs/{id}/renew`
-- `POST /v1/jobs/{id}/report`
-- `GET /v1/jobs/{id}`
+```sh
+CINDRAL_AGENT_TOKEN=... GITHUB_TOKEN=... cindral agent --url https://hook.yesvus.com
+```
 
-Leases are authoritative: a device holds a job until its lease expires, and an expired lease returns the job to the queue. Configuration:
-
-- `CINDRAL_JOBS_DB`: SQLite path; the queue stays off when unset.
-- `CINDRAL_AGENT_TOKEN`: bearer token agents present.
-- `CINDRAL_JOB_LEASE_SECONDS`: lease duration, default `300`.
-- `CINDRAL_JOB_TIMEOUT`: per-job timeout, default `3600`.
-- `CINDRAL_DIRECT_REPOSITORIES`: comma-separated `owner/name` list.
-- `CINDRAL_STATUS_CONTEXT`: commit status context, default `cindral/ci`.
-
-The agent loop is in `src/cindral/agent.py`. Execution is injected as a callable, so the on-device Docker executor can be wired in without changing the loop.
+See [docs/direct-execution.md](docs/direct-execution.md) for the contract schema, agent flags, and broker configuration. The agent loop is in `src/cindral/agent.py`; execution is injected as a callable, so the Docker executor is wired in without changing the loop.
 
 ## Repository boundaries
 

@@ -11,6 +11,8 @@ from typing import Callable, Iterable
 import urllib.error
 import urllib.request
 
+from .models import ExecutionResult
+
 
 class CindralError(RuntimeError):
     """Raised when a Relay request fails."""
@@ -69,12 +71,11 @@ class CindralClient:
             {"device": device, "lease_seconds": lease_seconds},
         )
 
-    def report(self, job_id: str, device: str, exit_code: int) -> dict:
-        _, payload = self._request(
-            "POST",
-            f"/v1/jobs/{job_id}/report",
-            {"device": device, "exit_code": exit_code},
-        )
+    def report(self, job_id: str, device: str, exit_code: int, log: str = "") -> dict:
+        body: dict[str, object] = {"device": device, "exit_code": exit_code}
+        if log:
+            body["log"] = log
+        _, payload = self._request("POST", f"/v1/jobs/{job_id}/report", body)
         return payload
 
     def _request(self, method: str, path: str, payload: dict) -> tuple[int, dict]:
@@ -143,7 +144,7 @@ class _LeaseHeartbeat(threading.Thread):
                 return
 
 
-Executor = Callable[[JobSpec, threading.Event], int]
+Executor = Callable[[JobSpec, threading.Event], "int | ExecutionResult"]
 
 
 class Agent:
@@ -170,8 +171,13 @@ class Agent:
         cancel = threading.Event()
         heartbeat = _LeaseHeartbeat(self.client, job.id, self.device, self.lease_seconds, cancel)
         heartbeat.start()
+        log = ""
         try:
-            exit_code = int(self.executor(job, cancel))
+            result = self.executor(job, cancel)
+            if isinstance(result, ExecutionResult):
+                exit_code, log = result.exit_code, result.log
+            else:
+                exit_code = int(result)
         except Exception:
             exit_code = 1
         finally:
@@ -179,7 +185,7 @@ class Agent:
         if heartbeat.lost.is_set():
             # the lease moved on; the server will reject a report anyway
             return True
-        self.client.report(job.id, self.device, exit_code)
+        self.client.report(job.id, self.device, exit_code, log)
         return True
 
     def serve_forever(self) -> None:

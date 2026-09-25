@@ -379,6 +379,7 @@ class CindralHandler(BaseHTTPRequestHandler):
         payload = self._read_json()
         device = str(payload["device"])
         exit_code = int(payload["exit_code"])
+        log = str(payload.get("log", "") or "")
         if not store.holds_lease(job_id, device):
             self._send(409, {"error": "job is not leased to this device"})
             return
@@ -397,7 +398,7 @@ class CindralHandler(BaseHTTPRequestHandler):
                 self._send(502, {"error": f"commit status update failed: {exc}"})
                 return
         try:
-            job = store.report(job_id, device, exit_code)
+            job = store.report(job_id, device, exit_code, log=log)
         except ValueError as exc:
             self._send(409, {"error": str(exc)})
             return

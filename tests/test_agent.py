@@ -40,6 +40,7 @@ class FakeClient:
         self.claims = []
         self.renewals = []
         self.reports = []
+        self.logs = []
 
     def claim(self, device, labels=(), lease_seconds=300):
         self.claims.append((device, tuple(labels), lease_seconds))
@@ -51,8 +52,9 @@ class FakeClient:
         self.renewals.append((job_id, device))
         return True
 
-    def report(self, job_id, device, exit_code):
+    def report(self, job_id, device, exit_code, log=""):
         self.reports.append((job_id, device, exit_code))
+        self.logs.append(log)
         return {"status": "success" if exit_code == 0 else "failure"}
 
 
@@ -140,6 +142,15 @@ class AgentTest(unittest.TestCase):
 
         self.assertTrue(Agent(client, "server", executor=executor).run_once())
         self.assertEqual(client.reports, [("job-1", "server", 1)])
+
+    def test_execution_result_log_is_reported(self) -> None:
+        from cindral.models import ExecutionResult
+
+        client = FakeClient([job()])
+        agent = Agent(client, "server", executor=lambda spec, cancel: ExecutionResult(2, "boom"))
+        agent.run_once()
+        self.assertEqual(client.reports, [("job-1", "server", 2)])
+        self.assertEqual(client.logs, ["boom"])
 
     def test_lease_is_renewed_while_the_job_runs(self) -> None:
         client = FakeClient([job()])

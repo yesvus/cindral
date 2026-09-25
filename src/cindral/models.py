@@ -4,6 +4,12 @@ from typing import Any, Mapping
 
 
 @dataclass(frozen=True)
+class ExecutionResult:
+    exit_code: int
+    log: str = ""
+
+
+@dataclass(frozen=True)
 class Runner:
     name: str
     status: str

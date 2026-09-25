@@ -10,6 +10,7 @@ RUNNING = "running"
 SUCCESS = "success"
 FAILURE = "failure"
 TERMINAL = (SUCCESS, FAILURE)
+MAX_LOG_CHARS = 64 * 1024
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,7 @@ class Job:
     exit_code: int | None = None
     attempts: int = 0
     delivery: str | None = None
+    log: str = ""
 
     def as_dict(self) -> dict:
         return {
@@ -42,6 +44,7 @@ class Job:
             "device": self.device,
             "exit_code": self.exit_code,
             "attempts": self.attempts,
+            "log": self.log,
         }
 
 
@@ -61,6 +64,7 @@ def _row(row: sqlite3.Row) -> Job:
         exit_code=row["exit_code"],
         attempts=int(row["attempts"]),
         delivery=row["delivery"],
+        log=row["log"] or "",
     )
 
 
@@ -97,10 +101,14 @@ class JobStore:
                     lease_expires REAL,
                     exit_code INTEGER,
                     attempts INTEGER NOT NULL DEFAULT 0,
-                    delivery TEXT
+                    delivery TEXT,
+                    log TEXT
                 )
                 """
             )
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(jobs)")}
+            if "log" not in columns:
+                connection.execute("ALTER TABLE jobs ADD COLUMN log TEXT")
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status, created_at)"
             )
@@ -269,6 +277,7 @@ class JobStore:
         device: str,
         exit_code: int,
         now: float | None = None,
+        log: str = "",
     ) -> Job:
         reported_at = time.time() if now is None else now
         connection = self._connect()
@@ -286,8 +295,8 @@ class JobStore:
                 raise ValueError("job lease has expired")
             status = SUCCESS if exit_code == 0 else FAILURE
             connection.execute(
-                "UPDATE jobs SET status = ?, exit_code = ?, lease_expires = NULL WHERE id = ?",
-                (status, int(exit_code), job_id),
+                "UPDATE jobs SET status = ?, exit_code = ?, lease_expires = NULL, log = ? WHERE id = ?",
+                (status, int(exit_code), log[:MAX_LOG_CHARS] if log else None, job_id),
             )
             connection.execute("COMMIT")
         except Exception:
