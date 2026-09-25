@@ -22,6 +22,7 @@ The service exposes:
 
 - `GET /healthz`
 - `POST /v1/route`
+- `POST /v1/dispatch`
 
 The route request accepts:
 
@@ -47,36 +48,28 @@ The response contains a JSON runner label array:
 }
 ```
 
-## Reusable workflow
+## Personal-account dispatch
 
-[`route.yml`](.github/workflows/route.yml) defines the reusable workflow contract. It expects a future dedicated `relay-router` runner and a `RUNNER_RELAY_URL` repository variable.
+This installation uses a personal GitHub account, not an organization. Runner Relay therefore uses a repository-local `workflow_dispatch` adapter. The k3s broker chooses the lane before dispatching the workflow.
 
-A repository opts in with a routing job and a workload job:
+Start from [`templates/personal-dispatch.yml`](templates/personal-dispatch.yml), replace `./scripts/ci` with the repository's real pnpm or npm command, and keep the fixed lane jobs. Runner Relay adds `relay_lane`, `relay_target`, and `relay_reason` to the dispatch inputs.
 
-```yaml
-jobs:
-  route:
-    uses: yesvus/runner-relay/.github/workflows/route.yml@main
-    with:
-      requested_lane: auto
-      repository_visibility: private
+The broker calls:
 
-  test:
-    needs: route
-    runs-on: ${{ fromJSON(needs.route.outputs.runs_on) }}
-    steps:
-      - uses: actions/checkout@v5
-      - run: ./scripts/ci
+```text
+POST /v1/dispatch
 ```
 
-Do not route untrusted pull-request code to self-hosted runners. Keep the routing job free of checkout and repository commands.
+with the target repository, workflow filename, ref, and repository-specific inputs. The broker requires a GitHub token for dispatching, supplied through a k3s Secret.
+
+No organization runner group or cross-repository runner scope is required. Repository-scoped runner registrations are managed separately.
 
 ## Repository boundaries
 
-- `runner-relay` owns policy, routing code, reusable workflows, and tests.
-- `ops` owns Gurbet deployment, resource limits, monitoring, and alerts.
+- `runner-relay` owns policy, broker code, dispatch templates, and tests.
+- `ops` owns the Gurbet k3s deployment, resource limits, monitoring, and alerts.
 - `fleet` owns host identity, hardware metadata, and inventory tags.
-- GitHub organization runner groups own cross-repository runner access.
+- GitHub repository-scoped runner registrations are managed by the broker.
 
 ## Development
 
@@ -85,4 +78,4 @@ python -m unittest discover -s tests -v
 python -m runner_relay.cli route --policy config/policy.toml --state examples/state.json --request examples/request.json
 ```
 
-The current implementation is the policy and service foundation. Live GitHub quota collection, Fleet/Beszel state ingestion, organization runner registration, and automatic repository migration are activation steps that belong in the Ops deployment and rollout plan.
+The current implementation is the policy and service foundation. Live GitHub quota collection, Fleet/Beszel state ingestion, repository-scoped runner registration, and automatic repository migration are activation steps that belong in the Ops deployment and rollout plan.

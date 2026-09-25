@@ -1,6 +1,7 @@
 """Command-line interface for Runner Relay."""
 import argparse
 import json
+import os
 from pathlib import Path
 
 from .models import RouteRequest
@@ -23,10 +24,11 @@ def main() -> None:
     service.add_argument("--state", default="examples/state.json")
     service.add_argument("--host", default="127.0.0.1")
     service.add_argument("--port", type=int, default=8095)
+    service.add_argument("--github-token-env", default="GITHUB_TOKEN")
 
     args = parser.parse_args()
     if args.command == "serve":
-        serve(args.policy, args.state, args.host, args.port)
+        serve(args.policy, args.state, args.host, args.port, os.environ.get(args.github_token_env))
         return
 
     policy = Policy.load(args.policy)
