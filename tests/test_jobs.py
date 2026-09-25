@@ -86,11 +86,14 @@ class JobStoreTest(unittest.TestCase):
         with self.assertRaises(KeyError):
             self.store.report("missing", "gurbet", 0)
 
-    def test_enqueue_requires_a_command_and_sha(self) -> None:
-        with self.assertRaises(ValueError):
-            self.store.enqueue("yesvus/a", "sha1", "main", ())
+    def test_enqueue_requires_a_sha(self) -> None:
         with self.assertRaises(ValueError):
             self.store.enqueue("yesvus/a", "", "main", ("ci",))
+
+    def test_command_is_optional(self) -> None:
+        job = self.store.enqueue("yesvus/a", "sha1", "main")
+        self.assertEqual(job.command, ())
+        self.assertEqual(self.store.get(job.id).command, ())
 
     def test_list_filters_by_status(self) -> None:
         first = self.store.enqueue("yesvus/a", "sha1", "main", ("ci",))

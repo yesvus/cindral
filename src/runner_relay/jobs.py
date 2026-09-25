@@ -18,11 +18,11 @@ class Job:
     repository: str
     sha: str
     ref: str
-    command: tuple[str, ...]
     labels: tuple[str, ...]
     timeout: int
     created_at: float
     status: str
+    command: tuple[str, ...] = ()
     device: str | None = None
     lease_expires: float | None = None
     exit_code: int | None = None
@@ -109,13 +109,11 @@ class JobStore:
         repository: str,
         sha: str,
         ref: str,
-        command: tuple[str, ...] | list[str],
+        command: tuple[str, ...] | list[str] = (),
         labels: tuple[str, ...] | list[str] = (),
         timeout: int = 3600,
         now: float | None = None,
     ) -> Job:
-        if not command:
-            raise ValueError("job requires a command")
         if not sha:
             raise ValueError("job requires a commit sha")
         job_id = uuid.uuid4().hex
