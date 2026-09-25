@@ -1,8 +1,8 @@
 # Direct execution
 
 Repositories listed in `CINDRAL_DIRECT_REPOSITORIES` run their CI on the device
-pool instead of dispatching the Actions adapter. No GitHub Actions runner is
-involved. Two events enqueue a job:
+pool: Cindral queues the job and a device agent executes it in bounded Docker.
+Two events enqueue a job:
 
 - A signed push to the default branch, on the pushed commit.
 - A trusted same-repository pull request (`opened`, `reopened`, `synchronize`,
