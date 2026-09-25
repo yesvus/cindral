@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Runner Relay operations
+    url: https://github.com/yesvus/ops
+    about: Deployment, monitoring, and host configuration live in the Ops repository.

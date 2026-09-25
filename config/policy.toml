@@ -1,0 +1,20 @@
+[hosted]
+runner = "ubuntu-24.04"
+
+[quota]
+minimum_remaining_minutes = 20
+reserve_minutes = 10
+paid_overage = "deny"
+
+[local]
+priority = ["fallback", "device"]
+device_priority = ["papyrus", "rover", "colak"]
+
+[lanes.fallback]
+labels = ["self-hosted", "Linux", "ARM64", "fallback"]
+
+[lanes.device]
+labels = ["self-hosted", "Linux", "ARM64", "device"]
+
+[lanes.burst]
+labels = ["self-hosted", "Linux", "ARM64", "burst"]

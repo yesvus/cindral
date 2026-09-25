@@ -1,0 +1,32 @@
+{
+  "runners": [
+    {
+      "name": "gurbet",
+      "status": "online",
+      "busy": false,
+      "healthy": true,
+      "labels": ["self-hosted", "Linux", "ARM64", "gurbet", "fallback"]
+    },
+    {
+      "name": "papyrus",
+      "status": "online",
+      "busy": false,
+      "healthy": true,
+      "labels": ["self-hosted", "Linux", "ARM64", "papyrus", "device"]
+    },
+    {
+      "name": "rover",
+      "status": "online",
+      "busy": false,
+      "healthy": true,
+      "labels": ["self-hosted", "Linux", "ARM64", "rover", "device"]
+    },
+    {
+      "name": "zombie-burst",
+      "status": "online",
+      "busy": false,
+      "healthy": true,
+      "labels": ["self-hosted", "Linux", "ARM64", "zombie", "burst"]
+    }
+  ]
+}

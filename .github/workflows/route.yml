@@ -1,0 +1,86 @@
+name: route
+
+on:
+  workflow_call:
+    inputs:
+      requested_lane:
+        required: false
+        type: string
+        default: auto
+      target:
+        required: false
+        type: string
+        default: ""
+      repository_visibility:
+        required: false
+        type: string
+        default: private
+      quota_status:
+        required: false
+        type: string
+        default: unknown
+      remaining_minutes:
+        required: false
+        type: string
+        default: ""
+      estimated_minutes:
+        required: false
+        type: string
+        default: "10"
+    outputs:
+      runs_on:
+        description: JSON runner label array
+        value: ${{ jobs.route.outputs.runs_on }}
+      lane:
+        description: Selected execution lane
+        value: ${{ jobs.route.outputs.lane }}
+      reason:
+        description: Routing reason
+        value: ${{ jobs.route.outputs.reason }}
+
+permissions: {}
+
+jobs:
+  route:
+    runs-on: [self-hosted, Linux, ARM64, relay-router]
+    timeout-minutes: 2
+    steps:
+      - id: route
+        env:
+          RELAY_URL: ${{ vars.RUNNER_RELAY_URL }}
+          REQUESTED_LANE: ${{ inputs.requested_lane }}
+          TARGET: ${{ inputs.target }}
+          REPOSITORY_VISIBILITY: ${{ inputs.repository_visibility }}
+          QUOTA_STATUS: ${{ inputs.quota_status }}
+          REMAINING_MINUTES: ${{ inputs.remaining_minutes }}
+          ESTIMATED_MINUTES: ${{ inputs.estimated_minutes }}
+        run: |
+          set -eu
+          test -n "$RELAY_URL"
+          export RELAY_URL REQUESTED_LANE TARGET REPOSITORY_VISIBILITY QUOTA_STATUS REMAINING_MINUTES ESTIMATED_MINUTES
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          payload = {
+              "requested_lane": os.environ["REQUESTED_LANE"],
+              "target": os.environ["TARGET"] or None,
+              "repository_visibility": os.environ["REPOSITORY_VISIBILITY"],
+              "quota_status": os.environ["QUOTA_STATUS"],
+              "remaining_minutes": float(os.environ["REMAINING_MINUTES"]) if os.environ["REMAINING_MINUTES"] else None,
+              "estimated_minutes": float(os.environ["ESTIMATED_MINUTES"]),
+          }
+          request = urllib.request.Request(
+              os.environ["RELAY_URL"].rstrip("/") + "/v1/route",
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              decision = json.load(response)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write("runs_on=" + json.dumps(decision["runs_on"], separators=(",", ":")) + "\n")
+              output.write("lane=" + decision["lane"] + "\n")
+              output.write("reason=" + decision["reason"].replace("\n", " ") + "\n")
+          PY
