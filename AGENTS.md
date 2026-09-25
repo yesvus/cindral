@@ -6,9 +6,8 @@ When asked to wire Runner Relay to a repository, make the repository use the sha
 
 1. Inspect the repository's package manager, lockfile, Node version, and existing scripts.
 2. Keep `pnpm lint`, `pnpm test`, `pnpm build`, and other commands in the target repository.
-3. Add a `route` job using `yesvus/runner-relay/.github/workflows/route.yml@main`.
-4. Make real work depend on the route output:
-   `runs-on: ${{ fromJSON(needs.route.outputs.runs_on) }}`.
+3. Add a repository-local `workflow_dispatch` adapter based on `templates/personal-dispatch.yml`.
+4. Let the k3s broker dispatch the adapter with `relay_lane`, `relay_target`, and `relay_reason`.
 5. Keep hosted execution as the default lane when quota is available; use local fallback when private-repository quota is exhausted or unknown.
 6. Use explicit lanes only for trusted, selected work.
 7. Keep untrusted pull-request code off self-hosted runners.

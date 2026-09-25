@@ -1,0 +1,61 @@
+name: relay-dispatch
+
+on:
+  workflow_dispatch:
+    inputs:
+      relay_lane:
+        required: true
+        type: choice
+        options:
+          - hosted
+          - fallback
+          - device
+          - burst
+      target:
+        required: false
+        type: string
+        default: desktop
+      relay_target:
+        required: false
+        type: string
+        default: ""
+      relay_reason:
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  hosted:
+    if: inputs.relay_lane == 'hosted'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - run: ./scripts/ci
+
+  fallback:
+    if: inputs.relay_lane == 'fallback'
+    runs-on: [self-hosted, Linux, ARM64, server, fallback]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - run: ./scripts/ci
+
+  device:
+    if: inputs.relay_lane == 'device' && (inputs.target == 'desktop' || inputs.target == 'laptop' || inputs.target == 'phone')
+    runs-on: [self-hosted, Linux, ARM64, "${{ inputs.target }}"]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - run: ./scripts/ci
+
+  burst:
+    if: inputs.relay_lane == 'burst'
+    runs-on: [self-hosted, Linux, ARM64, burst, burst]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - run: ./scripts/ci
