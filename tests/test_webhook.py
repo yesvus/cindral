@@ -22,7 +22,7 @@ def push_body(repository: str = REPO, private: bool = True, ref: str = "refs/hea
             "ref": ref,
             "after": "0" * 40,
             "deleted": deleted,
-            "repository": {"full_name": repository, "private": private},
+            "repository": {"full_name": repository, "private": private, "default_branch": "main"},
         }
     ).encode()
 
@@ -90,8 +90,6 @@ class WebhookEndpointTest(unittest.TestCase):
         self.server.github = None
         self.server.webhook_secret = SECRET
         self.server.dispatch_token = "dispatch-token"
-        self.server.allowed_repositories = frozenset({REPO})
-        self.server.allowed_branches = frozenset({"main"})
         self.server.workflow_file = "relay-dispatch.yml"
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -150,15 +148,18 @@ class WebhookEndpointTest(unittest.TestCase):
         self.assertEqual(payload["lane"], "hosted")
         self.assertEqual(github.dispatch.call_args[0][3]["relay_lane"], "hosted")
 
-    def test_repository_outside_the_allowlist_is_refused(self) -> None:
-        body = push_body(repository="yesvus/attacker/typo")
-        status, payload = self.post(
-            WEBHOOK_PATH, body, {"X-Hub-Signature-256": sign(SECRET, body), "X-GitHub-Event": "push"}
-        )
-        self.assertEqual(status, 403)
-        self.assertIn("not allowed", payload["error"])
+    def test_repository_without_the_relay_workflow_is_ignored(self) -> None:
+        body = push_body(repository="yesvus/other")
+        with patch.object(self.server, "github") as github:
+            github.workflow_exists.return_value = False
+            status, payload = self.post(
+                WEBHOOK_PATH, body, {"X-Hub-Signature-256": sign(SECRET, body), "X-GitHub-Event": "push"}
+            )
+        self.assertEqual(status, 202)
+        self.assertIn("opted in", payload["reason"])
+        github.dispatch.assert_not_called()
 
-    def test_branch_outside_the_allowlist_is_ignored_without_dispatch(self) -> None:
+    def test_non_default_branch_is_ignored_without_dispatch(self) -> None:
         body = push_body(ref="refs/heads/some-feature")
         with patch.object(self.server, "github") as github:
             status, payload = self.post(
@@ -167,6 +168,22 @@ class WebhookEndpointTest(unittest.TestCase):
         self.assertEqual(status, 202)
         self.assertEqual(payload["status"], "ignored")
         github.dispatch.assert_not_called()
+
+    def test_default_branch_is_read_from_the_repository_payload(self) -> None:
+        body = json.dumps(
+            {
+                "ref": "refs/heads/master",
+                "after": "0" * 40,
+                "repository": {"full_name": "yesvus/birtedcom", "private": True, "default_branch": "master"},
+            }
+        ).encode()
+        with patch.object(self.server, "github") as github:
+            status, payload = self.post(
+                WEBHOOK_PATH, body, {"X-Hub-Signature-256": sign(SECRET, body), "X-GitHub-Event": "push"}
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["branch"], "master")
+        github.dispatch.assert_called_once()
 
     def test_non_push_event_is_ignored(self) -> None:
         body = push_body()
