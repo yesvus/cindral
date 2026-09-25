@@ -34,9 +34,26 @@ class OnboardingTest(unittest.TestCase):
             errors = validate_adapter(adapter.name, self.policy)
         self.assertIn("workflow_dispatch is missing the relay_reason input", errors)
 
-    def test_lane_readiness_reports_registered_online_and_missing(self) -> None:
+    def test_lane_readiness_requires_an_online_matching_runner(self) -> None:
+        # fallback and device deliberately share the base label set, because
+        # that is what every self-hosted runner on this account actually
+        # carries. An offline runner must not make a lane ready.
         runners = (
             RepositoryRunner("fallback-box", "offline", self.policy.lane_labels["fallback"]),
+            RepositoryRunner("spare-box", "online", ("self-hosted", "Linux", "X64")),
+        )
+        readiness = {lane.lane: lane for lane in check_lane_readiness(self.policy, runners)}
+        self.assertTrue(readiness["hosted"].ready)
+        self.assertFalse(readiness["fallback"].ready)
+        self.assertEqual(readiness["fallback"].registered, ("fallback-box",))
+
+    def test_online_runner_matching_base_labels_serves_fallback_and_its_device_lane(self) -> None:
+        # An online ARM64 self-hosted runner satisfies the fallback lane as well
+        # as its own device lane, because both are selected by the same three
+        # labels and the device lane adds only the runner name. Documented
+        # consequence of dropping the class labels: fallback is "any local
+        # runner", not "a runner that calls itself fallback".
+        runners = (
             RepositoryRunner(
                 "papyrus",
                 "online",
@@ -44,10 +61,9 @@ class OnboardingTest(unittest.TestCase):
             ),
         )
         readiness = {lane.lane: lane for lane in check_lane_readiness(self.policy, runners)}
-        self.assertTrue(readiness["hosted"].ready)
-        self.assertFalse(readiness["fallback"].ready)
-        self.assertEqual(readiness["fallback"].registered, ("fallback-box",))
+        self.assertTrue(readiness["fallback"].ready)
         self.assertTrue(readiness["device:papyrus"].ready)
+        self.assertFalse(readiness["device:rover"].ready)
         self.assertFalse(readiness["burst"].ready)
 
     @patch("runner_relay.cli.GitHubClient")

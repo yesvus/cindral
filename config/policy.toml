@@ -11,11 +11,19 @@ unknown_quota = "local"
 priority = ["fallback", "device"]
 device_priority = ["papyrus", "rover", "colak"]
 
+# Lane labels are matched against the runners registered to the repository the
+# job runs in, not against fleet state. Every self-hosted runner on this account
+# is ARM64 and carries exactly these three labels, so a lane that adds a class
+# label of its own ("fallback", "device") matches nothing and the job queues
+# forever. The burst lane is the exception: zombie-burst really is registered
+# with a "burst" label, so that one keeps it.
 [lanes.fallback]
-labels = ["self-hosted", "Linux", "ARM64", "fallback"]
+labels = ["self-hosted", "Linux", "ARM64"]
 
+# Device lanes are selected by target, so the runner name is appended per
+# request and the class label is not needed here.
 [lanes.device]
-labels = ["self-hosted", "Linux", "ARM64", "device"]
+labels = ["self-hosted", "Linux", "ARM64"]
 
 [lanes.burst]
 labels = ["self-hosted", "Linux", "ARM64", "burst"]
