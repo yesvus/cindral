@@ -38,14 +38,29 @@ The adapter should not call the broker recursively and should not accept arbitra
 
 ## Onboarding check
 
-Run the onboarding check before enabling dispatch for a repository:
+Run onboarding from the Runner Relay checkout after the adapter is merged to the
+repository's default branch:
 
 ```sh
-export GITHUB_TOKEN=...
-runner-relay onboard OWNER/REPOSITORY --adapter /path/to/checkout/.github/workflows/relay-dispatch.yml
+GITHUB_TOKEN="$(gh auth token)" \
+RELAY_WEBHOOK_SECRET="$(cat ~/.relay-webhook-secret)" \
+uv run runner-relay onboard OWNER/REPOSITORY \
+  --checkout /path/to/checkout \
+  --register-webhook
 ```
 
-Run from the Runner Relay checkout so the default policy is available. The token needs repository Administration read access. The command validates the adapter file against `config/policy.toml` and lists hosted, fallback, device, and burst lane readiness. Missing or offline registrations are reported with the labels each lane requires. Runner registration is performed through the deployment's managed process.
+The command validates the local adapter against `config/policy.toml`, including
+adapters that delegate to a local reusable workflow. It confirms the adapter is
+present on the repository's default branch, checks runner readiness, then
+creates or updates the signed `push` webhook. The token needs permission to read
+workflows and runners and manage repository webhooks. Without
+`--register-webhook`, onboarding only validates and reports readiness.
+
+The adapter path defaults to `.github/workflows/relay-dispatch.yml` under
+`--checkout`. The webhook URL defaults to
+`https://cindral.example.com/relay/dispatch`; use `--webhook-url` to override it.
+The webhook secret is read from `RELAY_WEBHOOK_SECRET` and is never printed.
+Runner registration itself remains managed by the deployment.
 
 ## pnpm contract
 

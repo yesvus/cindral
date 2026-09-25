@@ -12,6 +12,8 @@ from .policy import Policy
 from .service import serve
 from .state import load_runners
 
+DEFAULT_WEBHOOK_URL = "https://cindral.example.com/relay/dispatch"
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="runner-relay")
@@ -25,8 +27,12 @@ def main() -> None:
     onboard = subparsers.add_parser("onboard")
     onboard.add_argument("repository", help="GitHub repository in owner/name format")
     onboard.add_argument("--policy", default="config/policy.toml")
-    onboard.add_argument("--adapter", required=True, help="path to the repository's workflow_dispatch adapter")
+    onboard.add_argument("--checkout", default=".", help="repository checkout containing the adapter")
+    onboard.add_argument("--adapter", help="path to the repository's workflow_dispatch adapter")
     onboard.add_argument("--github-token-env", default="GITHUB_TOKEN")
+    onboard.add_argument("--register-webhook", action="store_true")
+    onboard.add_argument("--webhook-url", default=os.environ.get("RELAY_WEBHOOK_URL", DEFAULT_WEBHOOK_URL))
+    onboard.add_argument("--webhook-secret-env", default="RELAY_WEBHOOK_SECRET")
 
     service = subparsers.add_parser("serve")
     service.add_argument("--policy", default="config/policy.toml")
@@ -45,15 +51,17 @@ def main() -> None:
             parser.error("repository must use the owner/name format")
         token = os.environ.get(args.github_token_env)
         if not token:
-            parser.error(f"set {args.github_token_env} to a token with repository Administration read access")
+            parser.error(f"set {args.github_token_env} to a token with runner, workflow, and webhook access")
         policy = Policy.load(args.policy)
-        errors = validate_adapter(args.adapter, policy)
+        adapter = Path(args.adapter) if args.adapter else Path(args.checkout) / ".github/workflows/relay-dispatch.yml"
+        errors = validate_adapter(adapter, policy)
         print(f"Repository: {args.repository}")
-        print(f"Adapter: {'valid' if not errors else 'needs changes'} ({args.adapter})")
+        print(f"Adapter: {'valid' if not errors else 'needs changes'} ({adapter})")
         for error in errors:
             print(f"  - {error}")
+        github = GitHubClient(token)
         try:
-            runners = GitHubClient(token).list_runners(args.repository)
+            runners = github.list_runners(args.repository)
         except GitHubAPIError as exc:
             print(f"Runner lookup failed: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
@@ -83,6 +91,20 @@ def main() -> None:
             if optional_missing:
                 print(f"Optional lanes not available in this repository: {', '.join(optional_missing)}")
                 print("  These are only used when a dispatch explicitly requests them.")
+            if args.register_webhook:
+                secret = os.environ.get(args.webhook_secret_env)
+                if not secret:
+                    print(f"Webhook setup failed: set {args.webhook_secret_env}", file=sys.stderr)
+                    raise SystemExit(1)
+                try:
+                    if not github.workflow_exists(args.repository, "relay-dispatch.yml"):
+                        print("Webhook setup failed: merge the relay adapter to the repository's default branch first", file=sys.stderr)
+                        raise SystemExit(1)
+                    result = github.ensure_push_webhook(args.repository, args.webhook_url, secret)
+                except (GitHubAPIError, ValueError) as exc:
+                    print(f"Webhook setup failed: {exc}", file=sys.stderr)
+                    raise SystemExit(1) from exc
+                print(f"Webhook: {result} ({args.webhook_url})")
             return
         print("Overall: not ready, the default hosted/fallback path does not resolve")
         raise SystemExit(1)

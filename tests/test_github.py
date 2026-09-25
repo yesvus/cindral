@@ -1,3 +1,4 @@
+import json
 import unittest
 from unittest.mock import patch
 
@@ -53,6 +54,39 @@ class GitHubClientTest(unittest.TestCase):
 
         urlopen.side_effect = HTTPError("url", 404, "not found", {}, None)
         self.assertFalse(GitHubClient("token").workflow_exists("example-org/example-app", "relay-dispatch.yml"))
+
+    @patch("runner_relay.github.urlopen")
+    def test_ensure_push_webhook_creates_hook_when_missing(self, urlopen) -> None:
+        urlopen.side_effect = [Response(b"[]"), Response()]
+        result = GitHubClient("token").ensure_push_webhook(
+            "example-org/example-app", "https://hook.example/relay/dispatch", "secret-value"
+        )
+        self.assertEqual(result, "created")
+        listing, create = [call.args[0] for call in urlopen.call_args_list]
+        self.assertIn("/hooks?per_page=100&page=1", listing.full_url)
+        self.assertEqual(create.get_method(), "POST")
+        payload = json.loads(create.data)
+        self.assertEqual(payload["events"], ["push"])
+        self.assertEqual(payload["config"]["secret"], "secret-value")
+        self.assertEqual(payload["config"]["insecure_ssl"], "0")
+
+    @patch("runner_relay.github.urlopen")
+    def test_ensure_push_webhook_updates_matching_hook(self, urlopen) -> None:
+        urlopen.side_effect = [
+            Response(b'[{"id":42,"config":{"url":"https://hook.example/relay/dispatch"}}]'),
+            Response(),
+        ]
+        result = GitHubClient("token").ensure_push_webhook(
+            "example-org/example-app", "https://hook.example/relay/dispatch", "secret-value"
+        )
+        self.assertEqual(result, "updated")
+        request = urlopen.call_args_list[1].args[0]
+        self.assertEqual(request.full_url, "https://api.github.com/repos/example-org/example-app/hooks/42")
+        self.assertEqual(request.get_method(), "PATCH")
+
+    def test_ensure_push_webhook_requires_https(self) -> None:
+        with self.assertRaises(ValueError):
+            GitHubClient("token").ensure_push_webhook("example-org/example-app", "http://hook.example/relay", "secret")
 
     @patch("runner_relay.github.urlopen")
     def test_list_runners_uses_repository_actions_api(self, urlopen) -> None:
