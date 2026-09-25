@@ -3,7 +3,7 @@ import json
 import re
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 
 
@@ -80,6 +80,98 @@ class GitHubClient:
             raise GitHubAPIError(f"GitHub workflow lookup failed with HTTP {exc.code}: {detail}") from exc
         except URLError as exc:
             raise GitHubAPIError(f"GitHub workflow lookup failed: {exc.reason}") from exc
+
+    def ensure_push_webhook(self, repository: str, url: str, secret: str) -> str:
+        if not is_repository_slug(repository):
+            raise ValueError("repository must use the owner/name format")
+        parsed = urlsplit(url)
+        if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
+            raise ValueError("webhook URL must be an HTTPS URL without embedded credentials")
+        if not secret:
+            raise ValueError("webhook secret must not be empty")
+
+        hooks = self._list_hooks(repository)
+        existing = next(
+            (
+                hook
+                for hook in hooks
+                if isinstance(hook, dict)
+                and isinstance(hook.get("config"), dict)
+                and hook["config"].get("url") == url
+            ),
+            None,
+        )
+        payload = {
+            "active": True,
+            "events": ["push"],
+            "config": {
+                "url": url,
+                "content_type": "json",
+                "secret": secret,
+                "insecure_ssl": "0",
+            },
+        }
+        if existing is None:
+            endpoint = f"{self.api_url}/repos/{quote(repository, safe='/')}/hooks"
+            method = "POST"
+            result = "created"
+        else:
+            hook_id = existing.get("id")
+            if not isinstance(hook_id, int):
+                raise GitHubAPIError("GitHub returned a webhook without a numeric id")
+            endpoint = f"{self.api_url}/repos/{quote(repository, safe='/')}/hooks/{hook_id}"
+            method = "PATCH"
+            result = "updated"
+        request = Request(
+            endpoint,
+            data=json.dumps(payload).encode(),
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            method=method,
+        )
+        try:
+            with urlopen(request, timeout=30):
+                pass
+        except HTTPError as exc:
+            detail = exc.read().decode(errors="replace")
+            raise GitHubAPIError(f"GitHub webhook setup failed with HTTP {exc.code}: {detail}") from exc
+        except URLError as exc:
+            raise GitHubAPIError(f"GitHub webhook setup failed: {exc.reason}") from exc
+        return result
+
+    def _list_hooks(self, repository: str) -> list[dict[str, object]]:
+        hooks: list[dict[str, object]] = []
+        page = 1
+        while True:
+            url = f"{self.api_url}/repos/{quote(repository, safe='/')}/hooks?per_page=100&page={page}"
+            request = Request(
+                url,
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "Authorization": f"Bearer {self.token}",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+            )
+            try:
+                with urlopen(request, timeout=30) as response:
+                    payload = json.loads(response.read())
+            except HTTPError as exc:
+                detail = exc.read().decode(errors="replace")
+                raise GitHubAPIError(f"GitHub webhook lookup failed with HTTP {exc.code}: {detail}") from exc
+            except URLError as exc:
+                raise GitHubAPIError(f"GitHub webhook lookup failed: {exc.reason}") from exc
+            except json.JSONDecodeError as exc:
+                raise GitHubAPIError("GitHub returned an invalid webhook list") from exc
+            if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
+                raise GitHubAPIError("GitHub returned an invalid webhook list")
+            hooks.extend(payload)
+            if len(payload) < 100:
+                return hooks
+            page += 1
 
     def list_runners(self, repository: str) -> tuple[RepositoryRunner, ...]:
         if not is_repository_slug(repository):
