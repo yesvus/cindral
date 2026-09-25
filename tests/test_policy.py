@@ -18,6 +18,7 @@ class PolicyTest(unittest.TestCase):
             minimum_remaining_minutes=20,
             reserve_minutes=10,
             paid_overage="deny",
+            unknown_quota="local",
         )
         self.runners = (
             Runner("server", "online", False, ("self-hosted", "Linux", "ARM64", "fallback")),
@@ -39,6 +40,11 @@ class PolicyTest(unittest.TestCase):
             self.runners,
         )
         self.assertEqual(decision.lane, "hosted")
+
+    def test_unknown_private_quota_prefers_local_fallback(self) -> None:
+        decision = self.policy.choose(RouteRequest(quota_status="unknown"), self.runners)
+        self.assertEqual(decision.lane, "fallback")
+        self.assertEqual(decision.runner, "server")
 
     def test_exhausted_quota_prefers_fallback(self) -> None:
         decision = self.policy.choose(RouteRequest(quota_status="exhausted"), self.runners)

@@ -5,6 +5,7 @@ runner = "ubuntu-24.04"
 minimum_remaining_minutes = 20
 reserve_minutes = 10
 paid_overage = "deny"
+unknown_quota = "local"
 
 [local]
 priority = ["fallback", "device"]

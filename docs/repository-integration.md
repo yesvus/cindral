@@ -102,7 +102,7 @@ A route job should call Runner Relay as a service. It should not check out the t
 
 ## Quota behavior
 
-The relay prefers hosted execution for public repositories and whenever private-repository quota is available. If quota is exhausted and paid overage is disabled, it selects an eligible local fallback before the workload starts.
+The relay prefers hosted execution for public repositories and whenever private-repository quota is explicitly available. If quota is exhausted or unknown and paid overage is disabled, it selects an eligible local fallback before the workload starts.
 
 A failed test is not a capacity signal. The relay must not rerun an ordinary test failure on another runner.
 

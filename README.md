@@ -8,12 +8,11 @@ Runner Relay chooses an execution lane before repository code runs. GitHub-hoste
 
 The default policy is in [`config/policy.toml`](config/policy.toml). Package-manager detection and repository integration rules are documented in [`docs/package-manager-policy.md`](docs/package-manager-policy.md) and [`docs/repository-integration.md`](docs/repository-integration.md).
 
-- Public repositories use `ubuntu-24.04`.
-- Private repositories use hosted runners while quota is available.
-- Exhausted quota selects the first healthy local fallback.
+- Public repositories use hosted runners.
+- Private repositories use hosted runners while quota is explicitly available.
+- Exhausted or unknown private-repository quota selects the first healthy local fallback.
 - Explicit `device`, `burst`, and `fallback` lanes are supported.
 - Ordinary test failures never trigger a rerun on another runner.
-- Unknown quota state defaults to hosted execution.
 
 The policy engine is deterministic and receives runner state as data. It does not execute repository code and does not store credentials.
 
