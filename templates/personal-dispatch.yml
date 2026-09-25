@@ -11,10 +11,6 @@ on:
           - fallback
           - device
           - burst
-      target:
-        required: false
-        type: string
-        default: desktop
       relay_target:
         required: false
         type: string
@@ -38,15 +34,15 @@ jobs:
 
   fallback:
     if: inputs.relay_lane == 'fallback'
-    runs-on: [self-hosted, Linux, ARM64, server, fallback]
+    runs-on: [self-hosted, Linux, ARM64, fallback]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - run: ./scripts/ci
 
   device:
-    if: inputs.relay_lane == 'device' && (inputs.target == 'desktop' || inputs.target == 'laptop' || inputs.target == 'phone')
-    runs-on: [self-hosted, Linux, ARM64, "${{ inputs.target }}"]
+    if: inputs.relay_lane == 'device' && (inputs.relay_target == 'desktop' || inputs.relay_target == 'laptop' || inputs.relay_target == 'phone')
+    runs-on: [self-hosted, Linux, ARM64, device, "${{ inputs.relay_target }}"]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
@@ -54,7 +50,7 @@ jobs:
 
   burst:
     if: inputs.relay_lane == 'burst'
-    runs-on: [self-hosted, Linux, ARM64, burst, burst]
+    runs-on: [self-hosted, Linux, ARM64, burst]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
