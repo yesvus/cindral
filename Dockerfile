@@ -14,10 +14,10 @@ ENV PYTHONPATH=/app/src
 # this the fail-closed startup warnings sit in the buffer forever and the
 # operator never sees that a webhook secret or allowlist is missing
 ENV PYTHONUNBUFFERED=1
-ENV RUNNER_RELAY_POLICY=/app/config/policy.toml
-ENV RUNNER_RELAY_STATE=/app/examples/state.json
+ENV CINDRAL_POLICY=/app/config/policy.toml
+ENV CINDRAL_STATE=/app/examples/state.json
 
 USER 65532:65532
 EXPOSE 8095
-ENTRYPOINT ["python", "-m", "runner_relay.cli"]
+ENTRYPOINT ["python", "-m", "cindral.cli"]
 CMD ["serve", "--policy", "/app/config/policy.toml", "--state", "/app/examples/state.json", "--host", "0.0.0.0", "--port", "8095"]

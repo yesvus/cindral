@@ -1,13 +1,13 @@
-# Runner Relay agent contract
+# Cindral agent contract
 
-When asked to wire Runner Relay to a repository, make the repository use the shared routing contract without moving repository-specific commands into Runner Relay.
+When asked to wire Cindral to a repository, make the repository use the shared routing contract without moving repository-specific commands into Cindral.
 
 ## Required workflow shape
 
 1. Inspect the repository's package manager, lockfile, Node version, and existing scripts.
 2. Keep `pnpm lint`, `pnpm test`, `pnpm build`, and other commands in the target repository.
 3. Add a repository-local `workflow_dispatch` adapter based on `templates/personal-dispatch.yml`.
-4. Let the k3s broker dispatch the adapter with `relay_lane`, `relay_target`, and `relay_reason`.
+4. Let the k3s broker dispatch the adapter with `cindral_lane`, `cindral_target`, and `cindral_reason`.
 5. Keep hosted execution as the default lane when quota is available; use local fallback when private-repository quota is exhausted or unknown.
 6. Use explicit lanes only for trusted, selected work.
 7. Keep untrusted pull-request code off self-hosted runners.
@@ -47,7 +47,7 @@ See [package manager policy](docs/package-manager-policy.md).
 
 ## Boundaries
 
-- Runner Relay owns routing policy and the reusable route workflow.
+- Cindral owns routing policy and the reusable route workflow.
 - Ops owns the Gurbet deployment, resource limits, monitoring, and alerts.
 - Fleet owns host identity, hardware metadata, and inventory tags.
 - The target repository owns its source code, dependency setup, test commands, build commands, and release credentials.

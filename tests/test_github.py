@@ -2,7 +2,7 @@ import json
 import unittest
 from unittest.mock import patch
 
-from runner_relay.github import GitHubAPIError, GitHubClient, GitHubDispatchError
+from cindral.github import GitHubAPIError, GitHubClient, GitHubDispatchError
 
 
 class Response:
@@ -20,16 +20,16 @@ class Response:
 
 
 class GitHubClientTest(unittest.TestCase):
-    @patch("runner_relay.github.urlopen")
+    @patch("cindral.github.urlopen")
     def test_dispatch_uses_workflow_dispatch_api(self, urlopen) -> None:
         urlopen.return_value = Response()
-        GitHubClient("token").dispatch("yesvus/waymux", "ci.yml", "main", {"relay_lane": "fallback"})
+        GitHubClient("token").dispatch("yesvus/waymux", "ci.yml", "main", {"cindral_lane": "fallback"})
         request = urlopen.call_args.args[0]
         self.assertEqual(request.full_url, "https://api.github.com/repos/yesvus/waymux/actions/workflows/ci.yml/dispatches")
         self.assertEqual(request.get_method(), "POST")
         self.assertIn("Bearer token", request.headers["Authorization"])
 
-    @patch("runner_relay.github.urlopen")
+    @patch("cindral.github.urlopen")
     def test_dispatch_surfaces_github_errors(self, urlopen) -> None:
         from urllib.error import HTTPError
 
@@ -37,29 +37,29 @@ class GitHubClientTest(unittest.TestCase):
         with self.assertRaises(GitHubDispatchError):
             GitHubClient("token").dispatch("yesvus/waymux", "ci.yml", "main", {})
 
-    @patch("runner_relay.github.urlopen")
+    @patch("cindral.github.urlopen")
     def test_workflow_lookup_uses_repository_actions_api(self, urlopen) -> None:
         urlopen.return_value = Response()
-        self.assertTrue(GitHubClient("token").workflow_exists("yesvus/waymux", "relay-dispatch.yml"))
+        self.assertTrue(GitHubClient("token").workflow_exists("yesvus/waymux", "cindral-dispatch.yml"))
         request = urlopen.call_args.args[0]
         self.assertEqual(
             request.full_url,
-            "https://api.github.com/repos/yesvus/waymux/actions/workflows/relay-dispatch.yml",
+            "https://api.github.com/repos/yesvus/waymux/actions/workflows/cindral-dispatch.yml",
         )
         self.assertEqual(request.get_method(), "GET")
 
-    @patch("runner_relay.github.urlopen")
+    @patch("cindral.github.urlopen")
     def test_missing_workflow_is_not_opted_in(self, urlopen) -> None:
         from urllib.error import HTTPError
 
         urlopen.side_effect = HTTPError("url", 404, "not found", {}, None)
-        self.assertFalse(GitHubClient("token").workflow_exists("yesvus/waymux", "relay-dispatch.yml"))
+        self.assertFalse(GitHubClient("token").workflow_exists("yesvus/waymux", "cindral-dispatch.yml"))
 
-    @patch("runner_relay.github.urlopen")
+    @patch("cindral.github.urlopen")
     def test_ensure_push_webhook_creates_hook_when_missing(self, urlopen) -> None:
         urlopen.side_effect = [Response(b"[]"), Response()]
         result = GitHubClient("token").ensure_push_webhook(
-            "yesvus/waymux", "https://hook.example/relay/dispatch", "secret-value"
+            "yesvus/waymux", "https://hook.example/cindral/dispatch", "secret-value"
         )
         self.assertEqual(result, "created")
         listing, create = [call.args[0] for call in urlopen.call_args_list]
@@ -70,14 +70,14 @@ class GitHubClientTest(unittest.TestCase):
         self.assertEqual(payload["config"]["secret"], "secret-value")
         self.assertEqual(payload["config"]["insecure_ssl"], "0")
 
-    @patch("runner_relay.github.urlopen")
+    @patch("cindral.github.urlopen")
     def test_ensure_push_webhook_updates_matching_hook(self, urlopen) -> None:
         urlopen.side_effect = [
-            Response(b'[{"id":42,"config":{"url":"https://hook.example/relay/dispatch"}}]'),
+            Response(b'[{"id":42,"config":{"url":"https://hook.example/cindral/dispatch"}}]'),
             Response(),
         ]
         result = GitHubClient("token").ensure_push_webhook(
-            "yesvus/waymux", "https://hook.example/relay/dispatch", "secret-value"
+            "yesvus/waymux", "https://hook.example/cindral/dispatch", "secret-value"
         )
         self.assertEqual(result, "updated")
         request = urlopen.call_args_list[1].args[0]
@@ -86,9 +86,9 @@ class GitHubClientTest(unittest.TestCase):
 
     def test_ensure_push_webhook_requires_https(self) -> None:
         with self.assertRaises(ValueError):
-            GitHubClient("token").ensure_push_webhook("yesvus/waymux", "http://hook.example/relay", "secret")
+            GitHubClient("token").ensure_push_webhook("yesvus/waymux", "http://hook.example/cindral", "secret")
 
-    @patch("runner_relay.github.urlopen")
+    @patch("cindral.github.urlopen")
     def test_list_runners_uses_repository_actions_api(self, urlopen) -> None:
         urlopen.return_value = Response(
             b'{"runners":[{"name":"papyrus","status":"online","busy":false,'
@@ -105,7 +105,7 @@ class GitHubClientTest(unittest.TestCase):
         self.assertFalse(runners[0].busy)
         self.assertEqual(runners[0].labels, ("self-hosted", "device"))
 
-    @patch("runner_relay.github.urlopen")
+    @patch("cindral.github.urlopen")
     def test_list_runners_preserves_busy_capacity(self, urlopen) -> None:
         urlopen.return_value = Response(
             b'{"runners":[{"name":"papyrus","status":"online","busy":true,'
@@ -119,7 +119,7 @@ class GitHubClientTest(unittest.TestCase):
             with self.subTest(repository=repository), self.assertRaises(ValueError):
                 GitHubClient("token").list_runners(repository)
 
-    @patch("runner_relay.github.urlopen")
+    @patch("cindral.github.urlopen")
     def test_list_runners_surfaces_github_errors(self, urlopen) -> None:
         from urllib.error import HTTPError
 

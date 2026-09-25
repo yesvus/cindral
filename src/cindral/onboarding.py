@@ -35,11 +35,11 @@ def validate_adapter(path: str | Path, policy: Policy) -> tuple[str, ...]:
     inputs = dispatch.get("inputs", {}) if isinstance(dispatch, dict) else {}
     if not isinstance(inputs, dict):
         inputs = {}
-    for name in ("relay_lane", "relay_target", "relay_reason", "relay_ref"):
+    for name in ("cindral_lane", "cindral_target", "cindral_reason", "cindral_ref"):
         if name not in inputs:
             errors.append(f"workflow_dispatch is missing the {name} input")
 
-    lane_input = inputs.get("relay_lane", {})
+    lane_input = inputs.get("cindral_lane", {})
     raw_options = lane_input.get("options", []) if isinstance(lane_input, dict) else []
     options = (
         set(raw_options)
@@ -48,10 +48,10 @@ def validate_adapter(path: str | Path, policy: Policy) -> tuple[str, ...]:
     )
     expected_lanes = {"hosted", *policy.lane_labels}
     if not isinstance(lane_input, dict) or lane_input.get("type") != "choice" or lane_input.get("required") != "true":
-        errors.append("relay_lane must be a required choice input")
+        errors.append("cindral_lane must be a required choice input")
     if options != expected_lanes:
-        errors.append("relay_lane choices must match hosted and configured policy lanes")
-    for name in ("relay_target", "relay_reason", "relay_ref"):
+        errors.append("cindral_lane choices must match hosted and configured policy lanes")
+    for name in ("cindral_target", "cindral_reason", "cindral_ref"):
         if not isinstance(inputs.get(name), dict) or inputs[name].get("type") != "string":
             errors.append(f"{name} must be a string input")
 
@@ -83,17 +83,17 @@ def validate_adapter(path: str | Path, policy: Policy) -> tuple[str, ...]:
             errors.append(f"workflow is missing the {lane} job")
             continue
         condition = str(job.get("if", ""))
-        if f"inputs.relay_lane == '{lane}'" not in condition:
-            errors.append(f"{lane} job must be selected by relay_lane")
+        if f"inputs.cindral_lane == '{lane}'" not in condition:
+            errors.append(f"{lane} job must be selected by cindral_lane")
         expected_runner: tuple[str, ...]
         if lane == "hosted":
             expected_runner = policy.hosted_runner
         else:
             expected_runner = policy.lane_labels[lane]
             if lane == "device":
-                expected_runner += ('${{ inputs.relay_target }}',)
-                if "inputs.relay_target" not in condition:
-                    errors.append("device job must validate relay_target")
+                expected_runner += ('${{ inputs.cindral_target }}',)
+                if "inputs.cindral_target" not in condition:
+                    errors.append("device job must validate cindral_target")
         uses = job.get("uses")
         if isinstance(uses, str):
             _validate_reusable_call(job, lane, expected_runner, policy, errors)
@@ -120,7 +120,7 @@ def validate_adapter(path: str | Path, policy: Policy) -> tuple[str, ...]:
     configured_targets = set(policy.device_priority)
     declared_targets = set()
     for target in policy.device_priority:
-        if f"inputs.relay_target == '{target}'" in device_condition:
+        if f"inputs.cindral_target == '{target}'" in device_condition:
             declared_targets.add(target)
     if declared_targets != configured_targets:
         errors.append("device job must allow exactly the configured device targets")
@@ -150,7 +150,7 @@ def _validate_reusable_call(
         if not all(label in runner for label in policy.lane_labels["device"]):
             errors.append("device reusable workflow must receive the configured runner labels")
         if not all(target in runner for target in policy.device_priority):
-            errors.append("device reusable workflow must map every configured relay_target")
+            errors.append("device reusable workflow must map every configured cindral_target")
     else:
         try:
             actual_runner = tuple(json.loads(runner)) if isinstance(runner, str) else ()

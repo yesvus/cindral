@@ -13,13 +13,13 @@ class DispatchTemplateTest(unittest.TestCase):
         with (ROOT / "config/policy.toml").open("rb") as stream:
             policy = tomllib.load(stream)
 
-        for input_name in ("relay_lane", "relay_target", "relay_reason", "relay_ref"):
+        for input_name in ("cindral_lane", "cindral_target", "cindral_reason", "cindral_ref"):
             self.assertRegex(template, rf"(?m)^      {input_name}:")
 
         self.assertNotRegex(template, r"(?m)^      target:")
-        self.assertEqual(template.count("ref: ${{ inputs.relay_ref || github.ref }}"), len(policy["lanes"]) + 1)
+        self.assertEqual(template.count("ref: ${{ inputs.cindral_ref || github.ref }}"), len(policy["lanes"]) + 1)
         target_guard = " || ".join(
-            f"inputs.relay_target == '{target}'"
+            f"inputs.cindral_target == '{target}'"
             for target in policy["local"]["device_priority"]
         )
         self.assertIn(f"&& ({target_guard})", template)
@@ -32,7 +32,7 @@ class DispatchTemplateTest(unittest.TestCase):
             self.assertIsNotNone(match, lane)
             labels = list(config["labels"])
             if lane == "device":
-                labels.append('"${{ inputs.relay_target }}"')
+                labels.append('"${{ inputs.cindral_target }}"')
             expected = f"runs-on: [{', '.join(labels)}]"
             self.assertIn(expected, match.group(1), lane)
 

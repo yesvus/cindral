@@ -58,8 +58,8 @@ wheels = [
 ]
 
 [[package]]
-name = "runner-relay"
-version = "0.6.1"
+name = "cindral"
+version = "0.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "pyyaml" },
