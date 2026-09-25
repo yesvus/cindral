@@ -34,13 +34,22 @@ def pull_request_body(
     action: str = "opened",
     number: int = 42,
     author_association: str = "OWNER",
+    head_repo: str | None = None,
+    head_sha: str = "head123",
+    merge_sha: str = "merge123",
+    draft: bool = False,
 ) -> bytes:
     return json.dumps(
         {
             "action": action,
             "number": number,
             "repository": {"full_name": repository, "private": private, "default_branch": "main"},
-            "pull_request": {"author_association": author_association},
+            "pull_request": {
+                "author_association": author_association,
+                "draft": draft,
+                "head": {"sha": head_sha, "repo": {"full_name": head_repo or repository}},
+                "merge_commit_sha": merge_sha,
+            },
         }
     ).encode()
 
@@ -103,6 +112,27 @@ class PullRequestEventTest(unittest.TestCase):
         self.assertTrue(event.trusted)
         self.assertEqual(event.ref, "refs/pull/42/merge")
         self.assertTrue(event.should_route)
+        self.assertTrue(event.same_repo)
+        self.assertTrue(event.direct_eligible)
+        self.assertEqual(event.run_sha, "merge123")
+        self.assertEqual(event.status_sha, "head123")
+
+    def test_fork_pull_request_is_not_direct_eligible(self) -> None:
+        event = parse_pull_request_event(pull_request_body(head_repo="someone/example-app"))
+        self.assertFalse(event.same_repo)
+        self.assertFalse(event.direct_eligible)
+
+    def test_draft_pull_request_is_not_direct_eligible(self) -> None:
+        event = parse_pull_request_event(pull_request_body(draft=True))
+        self.assertFalse(event.direct_eligible)
+
+    def test_closed_pull_request_is_not_direct_eligible(self) -> None:
+        event = parse_pull_request_event(pull_request_body(action="closed"))
+        self.assertFalse(event.direct_eligible)
+
+    def test_run_sha_falls_back_to_head_without_a_merge_commit(self) -> None:
+        event = parse_pull_request_event(pull_request_body(merge_sha=""))
+        self.assertEqual(event.run_sha, "head123")
 
     def test_outside_contributor_is_untrusted(self) -> None:
         event = parse_pull_request_event(pull_request_body(author_association="CONTRIBUTOR"))

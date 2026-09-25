@@ -42,10 +42,18 @@ class PullRequestEvent:
     number: int
     action: str
     author_association: str
+    head_repo: str = ""
+    head_sha: str = ""
+    merge_sha: str = ""
+    draft: bool = False
 
     @property
     def ref(self) -> str:
         return f"refs/pull/{self.number}/merge"
+
+    @property
+    def same_repo(self) -> bool:
+        return bool(self.head_repo) and self.head_repo == self.repository
 
     @property
     def trusted(self) -> bool:
@@ -54,6 +62,29 @@ class PullRequestEvent:
     @property
     def should_route(self) -> bool:
         return self.action in {"opened", "reopened", "synchronize", "ready_for_review"}
+
+    @property
+    def run_sha(self) -> str:
+        # the merge commit is what a pull_request check should test; fall back
+        # to the head commit when GitHub has not produced a merge commit yet
+        return self.merge_sha or self.head_sha
+
+    @property
+    def status_sha(self) -> str:
+        # statuses must land on the head commit so they surface on the PR
+        return self.head_sha or self.run_sha
+
+    @property
+    def direct_eligible(self) -> bool:
+        # only same-repository, trusted, non-draft pull requests that are routed
+        # may run on the device pool; fork code never executes there
+        return (
+            self.should_route
+            and self.same_repo
+            and self.trusted
+            and not self.draft
+            and bool(self.run_sha)
+        )
 
 
 def sign(secret: str, body: bytes) -> str:
@@ -121,6 +152,17 @@ def parse_pull_request_event(body: bytes) -> PullRequestEvent:
     author_association = pull_request.get("author_association")
     if not isinstance(action, str) or not isinstance(author_association, str):
         raise WebhookError("payload has no pull request action or author association")
+    head = pull_request.get("head")
+    head_repo = ""
+    head_sha = ""
+    if isinstance(head, dict):
+        head_sha_value = head.get("sha")
+        head_sha = head_sha_value if isinstance(head_sha_value, str) else ""
+        head_repo_value = head.get("repo")
+        if isinstance(head_repo_value, dict) and isinstance(head_repo_value.get("full_name"), str):
+            head_repo = head_repo_value["full_name"]
+    merge_sha_value = pull_request.get("merge_commit_sha")
+    merge_sha = merge_sha_value if isinstance(merge_sha_value, str) else ""
     return PullRequestEvent(
         repository=repository["full_name"],
         private=bool(repository.get("private")),
@@ -128,4 +170,8 @@ def parse_pull_request_event(body: bytes) -> PullRequestEvent:
         number=number,
         action=action,
         author_association=author_association,
+        head_repo=head_repo,
+        head_sha=head_sha,
+        merge_sha=merge_sha,
+        draft=bool(pull_request.get("draft")),
     )

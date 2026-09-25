@@ -67,7 +67,17 @@ No organization runner group or cross-repository runner scope is required. Repos
 
 ## Direct execution
 
-Repositories listed in `CINDRAL_DIRECT_REPOSITORIES` run their CI on the device pool instead of dispatching the Actions adapter. The repository declares its commands in a committed [`.cindral/ci.toml`](docs/direct-execution.md); a signed push to the default branch enqueues a job, posts a `pending` `cindral/ci` status, and a device agent runs it in bounded Docker.
+Repositories listed in `CINDRAL_DIRECT_REPOSITORIES` run their CI on the device
+pool instead of dispatching the Actions adapter. The repository declares its
+commands in a committed [`.cindral/ci.toml`](docs/direct-execution.md); a signed
+push to the default branch enqueues a job, a trusted same-repository pull
+request enqueues one on its merge commit, and a device agent runs it in bounded
+Docker. No GitHub Actions runner is involved.
+
+Trust boundary: only pull requests whose head repository is the target
+repository, whose author is an owner/member/collaborator, and that are not
+drafts run on the device pool. Fork and untrusted pull requests stay on the
+hosted lane.
 
 Start an agent on a device:
 

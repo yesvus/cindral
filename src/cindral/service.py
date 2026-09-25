@@ -390,7 +390,11 @@ class CindralHandler(BaseHTTPRequestHandler):
                 state, description = "failure", f"device pool run failed (exit {exit_code})"
             try:
                 self.server.github.post_status(
-                    job.repository, job.sha, state, description, context=self.server.status_context
+                    job.repository,
+                    job.status_sha or job.sha,
+                    state,
+                    description,
+                    context=self.server.status_context,
                 )
             except GitHubAPIError as exc:
                 # keep the job leased so the agent can retry the report; a
@@ -411,7 +415,14 @@ class CindralHandler(BaseHTTPRequestHandler):
             return
         self._send(200, job.as_dict())
 
-    def _enqueue_direct(self, repository: str, sha: str, branch: str) -> None:
+    def _enqueue_direct(
+        self,
+        repository: str,
+        sha: str,
+        ref: str,
+        status_sha: str | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
         if not self.server.agent_token:
             self._send(503, {"error": "direct execution requires CINDRAL_AGENT_TOKEN"})
             return
@@ -419,14 +430,19 @@ class CindralHandler(BaseHTTPRequestHandler):
         assert jobs is not None
         delivery = self.headers.get(DELIVERY_HEADER) or None
         job = jobs.enqueue(
-            repository, sha, branch, timeout=self.server.job_timeout, delivery=delivery
+            repository,
+            sha,
+            ref,
+            timeout=self.server.job_timeout,
+            delivery=delivery,
+            status_sha=status_sha,
         )
         posted = False
         if self.server.github is not None:
             try:
                 self.server.github.post_status(
                     repository,
-                    sha,
+                    status_sha or sha,
                     "pending",
                     "queued on the device pool",
                     context=self.server.status_context,
@@ -434,16 +450,16 @@ class CindralHandler(BaseHTTPRequestHandler):
                 posted = True
             except GitHubAPIError:
                 posted = False
-        self._send(
-            202,
-            {
-                "queued": True,
-                "job": job.id,
-                "repository": repository,
-                "sha": sha,
-                "status_posted": posted,
-            },
-        )
+        payload: dict[str, Any] = {
+            "queued": True,
+            "job": job.id,
+            "repository": repository,
+            "sha": sha,
+            "status_posted": posted,
+        }
+        if extra:
+            payload.update(extra)
+        self._send(202, payload)
 
     def _webhook(self) -> None:
         secret = self.server.webhook_secret
@@ -541,6 +557,21 @@ class CindralHandler(BaseHTTPRequestHandler):
             return
         if not event.should_route:
             self._send(202, {"status": "ignored", "reason": f"pull request action is not routed: {event.action}"})
+            return
+        # direct repositories run trusted, same-repository pull requests on the
+        # device pool; fork and untrusted pull requests stay on the hosted lane
+        if (
+            self.server.jobs is not None
+            and event.repository in self.server.direct_repositories
+            and event.direct_eligible
+        ):
+            self._enqueue_direct(
+                event.repository,
+                event.run_sha,
+                event.ref,
+                status_sha=event.status_sha,
+                extra={"pull_request": event.number, "trusted": True},
+            )
             return
         if self.server.github is None:
             self._send(503, {"error": "GitHub dispatch token is not configured"})
