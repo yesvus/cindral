@@ -11,7 +11,7 @@ from runner_relay.github import GitHubAPIError, RepositoryRunner
 from runner_relay.service import WEBHOOK_PATH, RelayHandler, RelayServer
 from runner_relay.state import load_runners
 from runner_relay.policy import Policy
-from runner_relay.webhook import parse_push_event, sign, verify_signature, WebhookError
+from runner_relay.webhook import parse_pull_request_event, parse_push_event, sign, verify_signature, WebhookError
 
 SECRET = "shhh"
 REPO = "example-org/example-app"
@@ -24,6 +24,23 @@ def push_body(repository: str = REPO, private: bool = True, ref: str = "refs/hea
             "after": "0" * 40,
             "deleted": deleted,
             "repository": {"full_name": repository, "private": private, "default_branch": "main"},
+        }
+    ).encode()
+
+
+def pull_request_body(
+    repository: str = REPO,
+    private: bool = True,
+    action: str = "opened",
+    number: int = 42,
+    author_association: str = "OWNER",
+) -> bytes:
+    return json.dumps(
+        {
+            "action": action,
+            "number": number,
+            "repository": {"full_name": repository, "private": private, "default_branch": "main"},
+            "pull_request": {"author_association": author_association},
         }
     ).encode()
 
@@ -78,6 +95,26 @@ class PushEventTest(unittest.TestCase):
     def test_non_json_is_refused(self) -> None:
         with self.assertRaises(WebhookError):
             parse_push_event(b"not json")
+
+
+class PullRequestEventTest(unittest.TestCase):
+    def test_trusted_pull_request_uses_merge_ref(self) -> None:
+        event = parse_pull_request_event(pull_request_body())
+        self.assertTrue(event.trusted)
+        self.assertEqual(event.ref, "refs/pull/42/merge")
+        self.assertTrue(event.should_route)
+
+    def test_outside_contributor_is_untrusted(self) -> None:
+        event = parse_pull_request_event(pull_request_body(author_association="CONTRIBUTOR"))
+        self.assertFalse(event.trusted)
+
+    def test_non_routing_action_is_ignored(self) -> None:
+        event = parse_pull_request_event(pull_request_body(action="closed"))
+        self.assertFalse(event.should_route)
+
+    def test_invalid_pull_request_number_is_refused(self) -> None:
+        with self.assertRaises(WebhookError):
+            parse_pull_request_event(pull_request_body(number=0))
 
 
 class WebhookEndpointTest(unittest.TestCase):
@@ -381,6 +418,72 @@ class WebhookEndpointTest(unittest.TestCase):
         with patch.object(self.server, "github") as github:
             status, _ = self.post(
                 WEBHOOK_PATH, body, {"X-Hub-Signature-256": sign(SECRET, body), "X-GitHub-Event": "ping"}
+            )
+        self.assertEqual(status, 202)
+        github.dispatch.assert_not_called()
+
+    def test_trusted_private_pull_request_uses_policy_fallback(self) -> None:
+        body = pull_request_body()
+        with patch.object(self.server, "github") as github:
+            status, payload = self.post(
+                WEBHOOK_PATH,
+                body,
+                {"X-Hub-Signature-256": sign(SECRET, body), "X-GitHub-Event": "pull_request"},
+            )
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["trusted"])
+        self.assertEqual(payload["lane"], "fallback")
+        repository, workflow, ref, inputs = github.dispatch.call_args[0]
+        self.assertEqual(repository, REPO)
+        self.assertEqual(workflow, "relay-dispatch.yml")
+        self.assertEqual(ref, "main")
+        self.assertEqual(inputs["relay_lane"], "fallback")
+        self.assertEqual(inputs["relay_ref"], "refs/pull/42/merge")
+
+    def test_untrusted_private_pull_request_is_forced_to_hosted(self) -> None:
+        body = pull_request_body(author_association="CONTRIBUTOR")
+        with patch.object(self.server, "github") as github:
+            status, payload = self.post(
+                WEBHOOK_PATH,
+                body,
+                {"X-Hub-Signature-256": sign(SECRET, body), "X-GitHub-Event": "pull_request"},
+            )
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["trusted"])
+        self.assertEqual(payload["lane"], "hosted")
+        self.assertEqual(payload["reason"], "untrusted pull request requires hosted execution")
+        self.assertEqual(github.dispatch.call_args[0][3]["relay_lane"], "hosted")
+
+    def test_public_pull_request_uses_hosted_lane(self) -> None:
+        body = pull_request_body(private=False)
+        with patch.object(self.server, "github") as github:
+            status, payload = self.post(
+                WEBHOOK_PATH,
+                body,
+                {"X-Hub-Signature-256": sign(SECRET, body), "X-GitHub-Event": "pull_request"},
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["lane"], "hosted")
+        self.assertEqual(github.dispatch.call_args[0][3]["relay_lane"], "hosted")
+
+    def test_bad_signature_on_pull_request_is_refused(self) -> None:
+        body = pull_request_body()
+        with patch.object(self.server, "github") as github:
+            status, _ = self.post(
+                WEBHOOK_PATH,
+                body,
+                {"X-Hub-Signature-256": sign("wrong", body), "X-GitHub-Event": "pull_request"},
+            )
+        self.assertEqual(status, 401)
+        github.dispatch.assert_not_called()
+
+    def test_closed_pull_request_is_ignored(self) -> None:
+        body = pull_request_body(action="closed")
+        with patch.object(self.server, "github") as github:
+            status, payload = self.post(
+                WEBHOOK_PATH,
+                body,
+                {"X-Hub-Signature-256": sign(SECRET, body), "X-GitHub-Event": "pull_request"},
             )
         self.assertEqual(status, 202)
         github.dispatch.assert_not_called()

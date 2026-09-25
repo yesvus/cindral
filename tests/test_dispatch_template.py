@@ -13,10 +13,11 @@ class DispatchTemplateTest(unittest.TestCase):
         with (ROOT / "config/policy.toml").open("rb") as stream:
             policy = tomllib.load(stream)
 
-        for input_name in ("relay_lane", "relay_target", "relay_reason"):
+        for input_name in ("relay_lane", "relay_target", "relay_reason", "relay_ref"):
             self.assertRegex(template, rf"(?m)^      {input_name}:")
 
         self.assertNotRegex(template, r"(?m)^      target:")
+        self.assertEqual(template.count("ref: ${{ inputs.relay_ref || github.ref }}"), len(policy["lanes"]) + 1)
         target_guard = " || ".join(
             f"inputs.relay_target == '{target}'"
             for target in policy["local"]["device_priority"]

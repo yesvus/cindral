@@ -19,12 +19,16 @@ on:
         required: false
         type: string
         default: ""
+      relay_ref:
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
 
 concurrency:
-  group: relay-${{ github.workflow }}-${{ github.ref }}
+  group: relay-${{ github.workflow }}-${{ inputs.relay_ref || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -34,6 +38,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.relay_ref || github.ref }}
       - run: ./scripts/ci
 
   fallback:
@@ -43,6 +49,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.relay_ref || github.ref }}
       - run: ./scripts/ci
 
   device:
@@ -53,6 +61,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.relay_ref || github.ref }}
       - run: ./scripts/ci
 
   burst:
@@ -61,4 +71,6 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.relay_ref || github.ref }}
       - run: ./scripts/ci

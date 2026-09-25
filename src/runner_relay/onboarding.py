@@ -35,7 +35,7 @@ def validate_adapter(path: str | Path, policy: Policy) -> tuple[str, ...]:
     inputs = dispatch.get("inputs", {}) if isinstance(dispatch, dict) else {}
     if not isinstance(inputs, dict):
         inputs = {}
-    for name in ("relay_lane", "relay_target", "relay_reason"):
+    for name in ("relay_lane", "relay_target", "relay_reason", "relay_ref"):
         if name not in inputs:
             errors.append(f"workflow_dispatch is missing the {name} input")
 
@@ -51,7 +51,7 @@ def validate_adapter(path: str | Path, policy: Policy) -> tuple[str, ...]:
         errors.append("relay_lane must be a required choice input")
     if options != expected_lanes:
         errors.append("relay_lane choices must match hosted and configured policy lanes")
-    for name in ("relay_target", "relay_reason"):
+    for name in ("relay_target", "relay_reason", "relay_ref"):
         if not isinstance(inputs.get(name), dict) or inputs[name].get("type") != "string":
             errors.append(f"{name} must be a string input")
 
