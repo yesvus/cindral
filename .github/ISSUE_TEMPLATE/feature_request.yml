@@ -20,3 +20,15 @@ body:
       label: Alternatives considered
     validations:
       required: false
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: "P0: data loss/production down. P1: high-impact or user-facing. P2: normal. P3: low."
+      options:
+        - P0
+        - P1
+        - P2
+        - P3
+    validations:
+      required: true
