@@ -6,11 +6,11 @@ from http.client import HTTPConnection
 from pathlib import Path
 from unittest.mock import patch
 
-from runner_relay.jobs import JobStore
-from runner_relay.policy import Policy
-from runner_relay.service import WEBHOOK_PATH, RelayHandler, RelayServer
-from runner_relay.state import load_runners
-from runner_relay.webhook import sign
+from cindral.jobs import JobStore
+from cindral.policy import Policy
+from cindral.service import WEBHOOK_PATH, CindralHandler, CindralServer
+from cindral.state import load_runners
+from cindral.webhook import sign
 
 SECRET = "webhook-secret"
 AGENT_TOKEN = "agent-token"
@@ -31,13 +31,13 @@ class JobEndpointTest(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        self.server = RelayServer(("127.0.0.1", 0), RelayHandler)
+        self.server = CindralServer(("127.0.0.1", 0), CindralHandler)
         self.server.policy = Policy.load("config/policy.toml")
         self.server.runners = load_runners("examples/state.json")
         self.server.github = None
         self.server.webhook_secret = SECRET
         self.server.dispatch_token = "dispatch-token"
-        self.server.workflow_file = "relay-dispatch.yml"
+        self.server.workflow_file = "cindral-dispatch.yml"
         self.server.jobs = JobStore(str(Path(self._tmp.name) / "jobs.db"))
         self.server.agent_token = AGENT_TOKEN
         self.server.direct_repositories = (REPO,)
