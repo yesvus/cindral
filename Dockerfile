@@ -1,6 +1,10 @@
 FROM python:3.12-slim
 
 WORKDIR /app
+# Runtime dependency, matching pyproject.toml. The image copies source instead
+# of installing the project, so nothing else pulls this in, and a missing yaml
+# only surfaces as an ImportError when a module that needs it is imported.
+RUN pip install --no-cache-dir "PyYAML>=6.0,<7"
 COPY src /app/src
 COPY config /app/config
 COPY examples /app/examples

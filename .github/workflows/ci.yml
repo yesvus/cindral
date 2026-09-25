@@ -20,3 +20,16 @@ jobs:
       - run: python -m pip install -e .
       - run: python -m unittest discover -s tests -v
       - run: python -m compileall -q src
+
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      # Unit tests run against an editable install, so they cannot detect a
+      # dependency the Dockerfile forgets to install. That only surfaces when
+      # the built image imports the module, which is how a missing PyYAML
+      # reached a pushed tag while every test passed.
+      - run: docker build -t runner-relay:ci .
+      - run: docker run --rm runner-relay:ci --help
+      - run: docker run --rm --entrypoint python runner-relay:ci -c "import runner_relay.onboarding"
