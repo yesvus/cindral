@@ -21,6 +21,7 @@ Start from [`templates/personal-dispatch.yml`](../templates/personal-dispatch.ym
 
 - accept `workflow_dispatch` inputs,
 - define fixed `hosted`, `fallback`, `device`, and `burst` jobs,
+- require the `fallback` custom label on the repository's fallback runner,
 - select jobs with `if: inputs.relay_lane == ...`,
 - keep repository commands in the repository,
 - set timeouts and concurrency limits,
@@ -51,7 +52,8 @@ uv run runner-relay onboard OWNER/REPOSITORY \
 
 The command validates the local adapter against `config/policy.toml`, including
 adapters that delegate to a local reusable workflow. It confirms the adapter is
-present on the repository's default branch, checks runner readiness, then
+present on the repository's default branch, checks that online runners carry
+the required lane labels, then
 creates or updates the signed `push` webhook. The token needs permission to read
 workflows and runners and manage repository webhooks. Without
 `--register-webhook`, onboarding only validates and reports readiness.
