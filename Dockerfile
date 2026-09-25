@@ -10,6 +10,10 @@ COPY config /app/config
 COPY examples /app/examples
 
 ENV PYTHONPATH=/app/src
+# stdout is block-buffered when not a TTY, and serve() never exits, so without
+# this the fail-closed startup warnings sit in the buffer forever and the
+# operator never sees that a webhook secret or allowlist is missing
+ENV PYTHONUNBUFFERED=1
 ENV RUNNER_RELAY_POLICY=/app/config/policy.toml
 ENV RUNNER_RELAY_STATE=/app/examples/state.json
 
