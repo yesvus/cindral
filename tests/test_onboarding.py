@@ -102,6 +102,15 @@ jobs:
             errors = validate_adapter(adapter.name, self.policy)
         self.assertIn("workflow_dispatch is missing the relay_reason input", errors)
 
+    def test_adapter_requires_relay_ref_input(self) -> None:
+        content = (ROOT / "templates/personal-dispatch.yml").read_text()
+        content = content.replace("      relay_ref:\n", "      pr_ref:\n", 1)
+        with tempfile.NamedTemporaryFile(mode="w+") as adapter:
+            adapter.write(content)
+            adapter.flush()
+            errors = validate_adapter(adapter.name, self.policy)
+        self.assertIn("workflow_dispatch is missing the relay_ref input", errors)
+
     def test_lane_readiness_requires_an_online_matching_runner(self) -> None:
         runners = (
             RepositoryRunner("fallback-box", "offline", self.policy.lane_labels["fallback"]),

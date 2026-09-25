@@ -20,6 +20,7 @@ from .webhook import (
     EVENT_HEADER,
     SIGNATURE_HEADER,
     WebhookError,
+    parse_pull_request_event,
     parse_push_event,
     verify_signature,
 )
@@ -287,8 +288,12 @@ class RelayHandler(BaseHTTPRequestHandler):
         if not verify_signature(secret, body, self.headers.get(SIGNATURE_HEADER)):
             self._send(401, {"error": "signature verification failed"})
             return
-        if self.headers.get(EVENT_HEADER) != "push":
-            self._send(202, {"status": "ignored", "reason": "event is not push"})
+        event_name = self.headers.get(EVENT_HEADER)
+        if event_name not in {"push", "pull_request"}:
+            self._send(202, {"status": "ignored", "reason": "event is not supported"})
+            return
+        if event_name == "pull_request":
+            self._pull_request_webhook(body)
             return
         try:
             event = parse_push_event(body)
@@ -348,6 +353,64 @@ class RelayHandler(BaseHTTPRequestHandler):
                 "dispatched": True,
                 "repository": event.repository,
                 "branch": branch,
+                "delivery": self.headers.get(DELIVERY_HEADER, ""),
+            },
+        )
+
+    def _pull_request_webhook(self, body: bytes) -> None:
+        try:
+            event = parse_pull_request_event(body)
+        except WebhookError as exc:
+            self._send(400, {"error": str(exc)})
+            return
+        if not is_repository_slug(event.repository):
+            self._send(400, {"error": "invalid repository name"})
+            return
+        if not event.should_route:
+            self._send(202, {"status": "ignored", "reason": f"pull request action is not routed: {event.action}"})
+            return
+        if self.server.github is None:
+            self._send(503, {"error": "GitHub dispatch token is not configured"})
+            return
+        try:
+            if not self.server.github.workflow_exists(event.repository, self.server.workflow_file):
+                self._send(202, {"status": "ignored", "reason": "repository has not opted in with the relay workflow"})
+                return
+        except GitHubAPIError as exc:
+            self._send(502, {"error": str(exc)})
+            return
+        request = RouteRequest(
+            requested_lane="auto" if event.trusted else "hosted",
+            repository_visibility="private" if event.private else "public",
+            quota_status="unknown",
+        )
+        try:
+            decision = self.server.policy.choose(request, self.server.runners)
+        except RouteUnavailable as exc:
+            self._send(409, {"error": str(exc)})
+            return
+        inputs = {
+            "relay_lane": decision.lane,
+            "relay_target": request.target or "",
+            "relay_reason": (
+                decision.reason if event.trusted else "untrusted pull request requires hosted execution"
+            ),
+            "relay_ref": event.ref,
+        }
+        try:
+            self.server.github.dispatch(event.repository, self.server.workflow_file, event.default_branch, inputs)
+        except GitHubDispatchError as exc:
+            self._send(502, {"error": str(exc)})
+            return
+        self._send(
+            200,
+            {
+                **decision.as_dict(),
+                "dispatched": True,
+                "repository": event.repository,
+                "pull_request": event.number,
+                "ref": event.ref,
+                "trusted": event.trusted,
                 "delivery": self.headers.get(DELIVERY_HEADER, ""),
             },
         )

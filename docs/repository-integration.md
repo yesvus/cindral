@@ -33,6 +33,7 @@ The broker dispatches these inputs:
 relay_lane
 relay_target
 relay_reason
+relay_ref
 ```
 
 The adapter should not call the broker recursively and should not accept arbitrary shell commands as dispatch inputs.
@@ -84,11 +85,9 @@ Repositories with an established npm workflow keep npm. Runner Relay detects the
 
 Self-hosted runners must not execute untrusted pull-request code.
 
-Use one of these patterns:
+Runner Relay treats pull requests from `OWNER`, `MEMBER`, and `COLLABORATOR` authors as trusted. All other author associations are forced to the hosted lane, regardless of quota policy. Trusted pull requests use the normal repository visibility and quota policy. The broker dispatches the adapter from the repository's default branch and passes `refs/pull/<number>/merge` as `relay_ref`, which the adapter checks out.
 
-- Run the adapter on `push` to a trusted branch and maintainer-controlled events.
-- Keep `pull_request` jobs on GitHub-hosted runners.
-- Skip local lanes for untrusted events.
+Configure the GitHub webhook for both `push` and `pull_request` events. Relay routes `opened`, `reopened`, `synchronize`, and `ready_for_review` actions. Other pull-request actions are acknowledged and ignored.
 
 The broker is a dispatcher. It does not check out repository code or run repository commands.
 
@@ -99,7 +98,7 @@ public.
 
 | Path | Who may call it | Gate |
 | --- | --- | --- |
-| `POST /relay/dispatch` | GitHub, from a webhook | `X-Hub-Signature-256` HMAC, the repository's default branch, and an opted-in relay workflow |
+| `POST /relay/dispatch` | GitHub, from a webhook | `X-Hub-Signature-256` HMAC, supported event and action, and an opted-in relay workflow |
 | `POST /v1/dispatch` | operator, in-cluster | `Authorization: Bearer $RELAY_DISPATCH_TOKEN` |
 | `POST /v1/route` | operator, in-cluster | none, it only returns a decision and has no side effects |
 
@@ -110,14 +109,17 @@ startup for each one that is unset.
 
 ### `/relay/dispatch` is the public entry point
 
-It accepts a GitHub `push` payload and dispatches the repository's adapter on
-the lane the policy selects. Anything else is acknowledged and ignored:
+It accepts signed GitHub `push` and `pull_request` payloads and dispatches the
+repository's adapter on the lane the policy selects. Other events are
+acknowledged and ignored:
 
 - a missing or wrong signature is `401`, and the comparison is constant-time
 - a repository without the configured relay workflow is `202` ignored
 - a branch other than the repository's default branch, a tag, or a deleted ref
   is `202` ignored, with no dispatch
-- a non-`push` event is `202` ignored
+- pull requests with actions other than `opened`, `reopened`, `synchronize`,
+  and `ready_for_review` are `202` ignored
+- untrusted pull requests are dispatched to the hosted lane
 
 Repository visibility is read from the payload, so a public repository still
 routes to hosted runners. Quota is deliberately reported as unknown, because
@@ -136,9 +138,11 @@ and can be changed with `RELAY_RUNNER_RESERVATION_SECONDS`. Reservations are
 process-local, so the broker must run one replica; GitHub's busy state remains
 the source of truth across restarts.
 
-The broker dispatches only the repository's default branch, read from the
-signed GitHub push payload. Neither repository names nor branch names need to
-be copied into the broker deployment.
+Pushes dispatch on the signed payload's default branch, and pull requests
+dispatch the adapter from that same default branch and pass the PR merge ref as
+`relay_ref`, keeping the workflow definition on trusted default-branch code
+while testing the proposed merge. Neither repository names nor branch names
+need to be copied into the broker deployment.
 
 ### Required environment
 

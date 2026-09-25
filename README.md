@@ -53,7 +53,7 @@ The response contains a JSON runner label array:
 
 This installation uses a personal GitHub account, not an organization. Runner Relay therefore uses a repository-local `workflow_dispatch` adapter. The k3s broker chooses the lane before dispatching the workflow.
 
-Start from [`templates/personal-dispatch.yml`](templates/personal-dispatch.yml), replace `./scripts/ci` with the repository's real pnpm or npm command, and keep the fixed lane jobs. Runner Relay adds `relay_lane`, `relay_target`, and `relay_reason` to the dispatch inputs.
+Start from [`templates/personal-dispatch.yml`](templates/personal-dispatch.yml), replace `./scripts/ci` with the repository's real pnpm or npm command, and keep the fixed lane jobs. Runner Relay adds `relay_lane`, `relay_target`, `relay_reason`, and `relay_ref` to the dispatch inputs. For PR dispatches the workflow runs from the repository's default branch and checks out the PR merge ref separately.
 
 The broker calls:
 
