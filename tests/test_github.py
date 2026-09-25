@@ -142,7 +142,15 @@ class GitHubClientTest(unittest.TestCase):
         payload = json.loads(request.data)
         self.assertEqual(payload["state"], "success")
         self.assertEqual(payload["context"], "cindral/ci")
+        self.assertEqual(payload["description"], "ci passed")
         self.assertEqual(payload["target_url"], "https://relay.example/run/1")
+
+    @patch("cindral.github.urlopen")
+    def test_post_status_truncates_the_description(self, urlopen) -> None:
+        urlopen.return_value = Response()
+        GitHubClient("token").post_status("example-org/example-app", "abc123", "failure", "x" * 200)
+        payload = json.loads(urlopen.call_args.args[0].data)
+        self.assertEqual(len(payload["description"]), 140)
 
     def test_post_status_rejects_invalid_state_and_repository(self) -> None:
         with self.assertRaises(ValueError):

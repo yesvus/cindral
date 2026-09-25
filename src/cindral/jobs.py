@@ -27,6 +27,7 @@ class Job:
     lease_expires: float | None = None
     exit_code: int | None = None
     attempts: int = 0
+    delivery: str | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -59,6 +60,7 @@ def _row(row: sqlite3.Row) -> Job:
         lease_expires=row["lease_expires"],
         exit_code=row["exit_code"],
         attempts=int(row["attempts"]),
+        delivery=row["delivery"],
     )
 
 
@@ -94,12 +96,16 @@ class JobStore:
                     device TEXT,
                     lease_expires REAL,
                     exit_code INTEGER,
-                    attempts INTEGER NOT NULL DEFAULT 0
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    delivery TEXT
                 )
                 """
             )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status, created_at)"
+            )
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS jobs_delivery ON jobs(delivery) WHERE delivery IS NOT NULL"
             )
         finally:
             connection.close()
@@ -112,6 +118,7 @@ class JobStore:
         command: tuple[str, ...] | list[str] = (),
         labels: tuple[str, ...] | list[str] = (),
         timeout: int = 3600,
+        delivery: str | None = None,
         now: float | None = None,
     ) -> Job:
         if not sha:
@@ -120,21 +127,33 @@ class JobStore:
         created = time.time() if now is None else now
         connection = self._connect()
         try:
-            connection.execute(
-                "INSERT INTO jobs (id, repository, sha, ref, command, labels, timeout, created_at, status)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    job_id,
-                    repository,
-                    sha,
-                    ref,
-                    json.dumps(list(command)),
-                    json.dumps(list(labels)),
-                    int(timeout),
-                    created,
-                    PENDING,
-                ),
-            )
+            try:
+                connection.execute(
+                    "INSERT INTO jobs"
+                    " (id, repository, sha, ref, command, labels, timeout, created_at, status, delivery)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        job_id,
+                        repository,
+                        sha,
+                        ref,
+                        json.dumps(list(command)),
+                        json.dumps(list(labels)),
+                        int(timeout),
+                        created,
+                        PENDING,
+                        delivery,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                if not delivery:
+                    raise
+                row = connection.execute(
+                    "SELECT * FROM jobs WHERE delivery = ?", (delivery,)
+                ).fetchone()
+                if row is None:
+                    raise
+                return _row(row)
         finally:
             connection.close()
         return Job(
@@ -147,6 +166,7 @@ class JobStore:
             timeout=int(timeout),
             created_at=created,
             status=PENDING,
+            delivery=delivery,
         )
 
     def get(self, job_id: str) -> Job | None:
@@ -164,11 +184,20 @@ class JobStore:
         lease_seconds: int = 300,
         now: float | None = None,
     ) -> Job | None:
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
         claimed_at = time.time() if now is None else now
         advertised = set(labels)
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
+            # return abandoned jobs before handing out work so a device that
+            # disappeared does not strand its job in running forever
+            connection.execute(
+                "UPDATE jobs SET status = ?, device = NULL, lease_expires = NULL"
+                " WHERE status = ? AND lease_expires IS NOT NULL AND lease_expires < ?",
+                (PENDING, RUNNING, claimed_at),
+            )
             rows = connection.execute(
                 "SELECT * FROM jobs WHERE status = ? ORDER BY created_at ASC",
                 (PENDING,),
@@ -187,7 +216,8 @@ class JobStore:
             )
             connection.execute("COMMIT")
         except Exception:
-            connection.execute("ROLLBACK")
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
             raise
         finally:
             connection.close()
@@ -200,14 +230,36 @@ class JobStore:
         lease_seconds: int = 300,
         now: float | None = None,
     ) -> bool:
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
         renewed_at = time.time() if now is None else now
         connection = self._connect()
         try:
             cursor = connection.execute(
-                "UPDATE jobs SET lease_expires = ? WHERE id = ? AND status = ? AND device = ?",
-                (renewed_at + lease_seconds, job_id, RUNNING, device),
+                "UPDATE jobs SET lease_expires = ?"
+                " WHERE id = ? AND status = ? AND device = ?"
+                " AND lease_expires IS NOT NULL AND lease_expires > ?",
+                (renewed_at + lease_seconds, job_id, RUNNING, device, renewed_at),
             )
             return cursor.rowcount == 1
+        finally:
+            connection.close()
+
+    def holds_lease(self, job_id: str, device: str, now: float | None = None) -> bool:
+        checked_at = time.time() if now is None else now
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT status, device, lease_expires FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            return (
+                row["status"] == RUNNING
+                and row["device"] == device
+                and row["lease_expires"] is not None
+                and row["lease_expires"] > checked_at
+            )
         finally:
             connection.close()
 
@@ -218,6 +270,7 @@ class JobStore:
         exit_code: int,
         now: float | None = None,
     ) -> Job:
+        reported_at = time.time() if now is None else now
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -228,6 +281,9 @@ class JobStore:
             if row["status"] != RUNNING or row["device"] != device:
                 connection.execute("ROLLBACK")
                 raise ValueError("job is not leased to this device")
+            if row["lease_expires"] is None or row["lease_expires"] <= reported_at:
+                connection.execute("ROLLBACK")
+                raise ValueError("job lease has expired")
             status = SUCCESS if exit_code == 0 else FAILURE
             connection.execute(
                 "UPDATE jobs SET status = ?, exit_code = ?, lease_expires = NULL WHERE id = ?",

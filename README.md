@@ -85,7 +85,7 @@ Leases are authoritative: a device holds a job until its lease expires, and an e
 - `CINDRAL_DIRECT_REPOSITORIES`: comma-separated `owner/name` list.
 - `CINDRAL_STATUS_CONTEXT`: commit status context, default `cindral/ci`.
 
-The agent loop is in `src/runner_relay/agent.py`. Execution is injected as a callable, so the on-device Docker executor can be wired in without changing the loop.
+The agent loop is in `src/cindral/agent.py`. Execution is injected as a callable, so the on-device Docker executor can be wired in without changing the loop.
 
 ## Repository boundaries
 

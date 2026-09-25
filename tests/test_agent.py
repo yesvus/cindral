@@ -4,7 +4,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from cindral.agent import Agent, JobSpec, CindralClient, CindralError
+from cindral.agent import Agent, CindralClient, CindralError, JobSpec
 
 
 class Response:
@@ -34,8 +34,9 @@ def job(job_id="job-1", command=("pnpm", "ci")):
 
 
 class FakeClient:
-    def __init__(self, jobs=()):
+    def __init__(self, jobs=(), fail_renew=False):
         self._jobs = list(jobs)
+        self._fail_renew = fail_renew
         self.claims = []
         self.renewals = []
         self.reports = []
@@ -45,6 +46,8 @@ class FakeClient:
         return self._jobs.pop(0) if self._jobs else None
 
     def renew(self, job_id, device, lease_seconds=300):
+        if self._fail_renew:
+            raise CindralError("lease lost")
         self.renewals.append((job_id, device))
         return True
 
@@ -92,6 +95,12 @@ class CindralClientTest(unittest.TestCase):
             CindralClient("https://relay.example", "token").claim("server")
 
     @patch("cindral.agent.urllib.request.urlopen")
+    def test_malformed_json_becomes_a_cindral_error(self, urlopen) -> None:
+        urlopen.return_value = Response(b"not json")
+        with self.assertRaises(CindralError):
+            CindralClient("https://relay.example", "token").claim("server")
+
+    @patch("cindral.agent.urllib.request.urlopen")
     def test_report_sends_the_exit_code(self, urlopen) -> None:
         urlopen.return_value = Response(json.dumps({"status": "failure"}).encode())
         payload = CindralClient("https://relay.example", "token").report("job-1", "server", 7)
@@ -104,7 +113,7 @@ class AgentTest(unittest.TestCase):
     def test_run_once_returns_false_without_a_job(self) -> None:
         client = FakeClient()
         executed = []
-        agent = Agent(client, "server", executor=lambda spec: executed.append(spec) or 0)
+        agent = Agent(client, "server", executor=lambda spec, cancel: executed.append(spec) or 0)
         self.assertFalse(agent.run_once())
         self.assertEqual(executed, [])
         self.assertEqual(client.reports, [])
@@ -113,7 +122,7 @@ class AgentTest(unittest.TestCase):
         client = FakeClient([job()])
         seen = []
 
-        def executor(spec):
+        def executor(spec, cancel):
             seen.append(spec)
             return 0
 
@@ -126,7 +135,7 @@ class AgentTest(unittest.TestCase):
     def test_executor_failure_reports_a_nonzero_exit(self) -> None:
         client = FakeClient([job()])
 
-        def executor(spec):
+        def executor(spec, cancel):
             raise RuntimeError("docker is not running")
 
         self.assertTrue(Agent(client, "server", executor=executor).run_once())
@@ -135,13 +144,27 @@ class AgentTest(unittest.TestCase):
     def test_lease_is_renewed_while_the_job_runs(self) -> None:
         client = FakeClient([job()])
 
-        def executor(spec):
-            time.sleep(1.2)
+        def executor(spec, cancel):
+            deadline = time.time() + 4
+            while not client.renewals and time.time() < deadline:
+                time.sleep(0.02)
             return 0
 
         Agent(client, "server", executor=executor, lease_seconds=3).run_once()
         self.assertTrue(client.renewals)
         self.assertEqual(client.renewals[0], ("job-1", "server"))
+
+    def test_a_lost_lease_cancels_the_executor_and_skips_the_report(self) -> None:
+        client = FakeClient([job()], fail_renew=True)
+        cancelled = []
+
+        def executor(spec, cancel):
+            cancelled.append(cancel.wait(4))
+            return 0
+
+        self.assertTrue(Agent(client, "server", executor=executor, lease_seconds=3).run_once())
+        self.assertEqual(cancelled, [True])
+        self.assertEqual(client.reports, [])
 
 
 if __name__ == "__main__":

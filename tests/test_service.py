@@ -182,5 +182,56 @@ class JobEndpointTest(unittest.TestCase):
         self.assertEqual(self.server.jobs.list(), [])
 
 
+    def test_claim_rejects_get(self) -> None:
+        status, _ = self.call("GET", "/v1/jobs/claim")
+        self.assertEqual(status, 405)
+
+    def test_status_rejects_post(self) -> None:
+        job = self.server.jobs.enqueue(REPO, "abc123", "main")
+        status, _ = self.call("POST", f"/v1/jobs/{job.id}")
+        self.assertEqual(status, 405)
+
+    def test_report_retries_after_a_failed_status_update(self) -> None:
+        from cindral.github import GitHubAPIError
+
+        job = self.server.jobs.enqueue(REPO, "abc123", "main")
+        self.server.jobs.claim("server", [])
+        with patch.object(self.server, "github") as github:
+            github.post_status.side_effect = GitHubAPIError("boom")
+            status, _ = self.call("POST", f"/v1/jobs/{job.id}/report", {"device": "server", "exit_code": 0})
+        self.assertEqual(status, 502)
+        self.assertEqual(self.server.jobs.get(job.id).status, "running")
+        with patch.object(self.server, "github") as github:
+            status, payload = self.call("POST", f"/v1/jobs/{job.id}/report", {"device": "server", "exit_code": 0})
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["status_posted"])
+
+    def test_direct_push_without_agent_token_is_refused(self) -> None:
+        self.server.agent_token = None
+        body = push_body()
+        with patch.object(self.server, "github") as github:
+            status, _ = self.deliver(
+                body,
+                {"X-Hub-Signature-256": sign(SECRET, body), "X-GitHub-Event": "push"},
+            )
+        self.assertEqual(status, 503)
+        github.dispatch.assert_not_called()
+        self.assertEqual(self.server.jobs.list(), [])
+
+    def test_duplicate_delivery_is_idempotent(self) -> None:
+        body = push_body()
+        headers = {
+            "X-Hub-Signature-256": sign(SECRET, body),
+            "X-GitHub-Event": "push",
+            "X-GitHub-Delivery": "delivery-1",
+        }
+        with patch.object(self.server, "github"):
+            self.deliver(body, headers)
+            status, payload = self.deliver(body, headers)
+        self.assertEqual(status, 202)
+        self.assertTrue(payload["queued"])
+        self.assertEqual(len(self.server.jobs.list()), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

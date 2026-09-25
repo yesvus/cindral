@@ -12,7 +12,7 @@ import time
 from typing import Any
 
 from .github import GitHubAPIError, GitHubClient, GitHubDispatchError, RepositoryRunner, is_repository_slug
-from .jobs import SUCCESS, JobStore
+from .jobs import JobStore
 from .models import RouteDecision, RouteRequest, Runner
 from .policy import Policy, RouteUnavailable
 from .state import load_runners
@@ -319,8 +319,12 @@ class CindralHandler(BaseHTTPRequestHandler):
             self._send(401, {"error": "job requests require a bearer token"})
             return
         path = self.path.split("?", 1)[0].rstrip("/")
+        method = self.command
         try:
             if path == "/v1/jobs/claim":
+                if method != "POST":
+                    self._send(405, {"error": "claim requires POST"})
+                    return
                 self._claim(store)
                 return
             if path.startswith("/v1/jobs/"):
@@ -328,13 +332,19 @@ class CindralHandler(BaseHTTPRequestHandler):
                 if not job_id:
                     self._send(404, {"error": "not found"})
                     return
-                if action == "renew":
-                    self._renew(store, job_id)
-                    return
-                if action == "report":
-                    self._report(store, job_id)
+                if action in {"renew", "report"}:
+                    if method != "POST":
+                        self._send(405, {"error": f"{action} requires POST"})
+                        return
+                    if action == "renew":
+                        self._renew(store, job_id)
+                    else:
+                        self._report(store, job_id)
                     return
                 if action == "":
+                    if method != "GET":
+                        self._send(405, {"error": "job status requires GET"})
+                        return
                     self._job_status(store, job_id)
                     return
             self._send(404, {"error": "not found"})
@@ -362,18 +372,36 @@ class CindralHandler(BaseHTTPRequestHandler):
         self._send(200, {"renewed": True, "id": job_id})
 
     def _report(self, store: JobStore, job_id: str) -> None:
-        if store.get(job_id) is None:
+        job = store.get(job_id)
+        if job is None:
             self._send(404, {"error": "unknown job"})
             return
         payload = self._read_json()
         device = str(payload["device"])
         exit_code = int(payload["exit_code"])
+        if not store.holds_lease(job_id, device):
+            self._send(409, {"error": "job is not leased to this device"})
+            return
+        if self.server.github is not None:
+            if exit_code == 0:
+                state, description = "success", "device pool run passed"
+            else:
+                state, description = "failure", f"device pool run failed (exit {exit_code})"
+            try:
+                self.server.github.post_status(
+                    job.repository, job.sha, state, description, context=self.server.status_context
+                )
+            except GitHubAPIError as exc:
+                # keep the job leased so the agent can retry the report; a
+                # terminal job with a lost status could never be repaired
+                self._send(502, {"error": f"commit status update failed: {exc}"})
+                return
         try:
             job = store.report(job_id, device, exit_code)
         except ValueError as exc:
             self._send(409, {"error": str(exc)})
             return
-        self._send(200, {**job.as_dict(), "status_posted": self._post_job_status(job)})
+        self._send(200, {**job.as_dict(), "status_posted": self.server.github is not None})
 
     def _job_status(self, store: JobStore, job_id: str) -> None:
         job = store.get(job_id)
@@ -382,26 +410,16 @@ class CindralHandler(BaseHTTPRequestHandler):
             return
         self._send(200, job.as_dict())
 
-    def _post_job_status(self, job: Any) -> bool:
-        github = self.server.github
-        if github is None:
-            return False
-        if job.status == SUCCESS:
-            state, description = "success", "device pool run passed"
-        else:
-            state, description = "failure", f"device pool run failed (exit {job.exit_code})"
-        try:
-            github.post_status(
-                job.repository, job.sha, state, description, context=self.server.status_context
-            )
-            return True
-        except GitHubAPIError:
-            return False
-
     def _enqueue_direct(self, repository: str, sha: str, branch: str) -> None:
+        if not self.server.agent_token:
+            self._send(503, {"error": "direct execution requires CINDRAL_AGENT_TOKEN"})
+            return
         jobs = self.server.jobs
         assert jobs is not None
-        job = jobs.enqueue(repository, sha, branch, timeout=self.server.job_timeout)
+        delivery = self.headers.get(DELIVERY_HEADER) or None
+        job = jobs.enqueue(
+            repository, sha, branch, timeout=self.server.job_timeout, delivery=delivery
+        )
         posted = False
         if self.server.github is not None:
             try:
