@@ -6,7 +6,7 @@ Runner Relay chooses an execution lane before repository code runs. GitHub-hoste
 
 ## Policy
 
-The default policy is in [`config/policy.toml`](config/policy.toml).
+The default policy is in [`config/policy.toml`](config/policy.toml). Package-manager detection and repository integration rules are documented in [`docs/package-manager-policy.md`](docs/package-manager-policy.md) and [`docs/repository-integration.md`](docs/repository-integration.md).
 
 - Public repositories use `ubuntu-24.04`.
 - Private repositories use hosted runners while quota is available.
