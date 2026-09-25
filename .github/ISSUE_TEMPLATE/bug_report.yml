@@ -25,3 +25,13 @@ body:
     attributes:
       label: Logs / metrics
       render: text
+  - type: input
+    id: version
+    attributes:
+      label: Runner Relay version or commit
+      placeholder: 0.1.0 or a commit SHA
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include relevant runner, GitHub Actions, or deployment details.
