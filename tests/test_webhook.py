@@ -5,8 +5,9 @@ import json
 import threading
 import unittest
 from http.client import HTTPConnection
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+from runner_relay.github import GitHubAPIError, RepositoryRunner
 from runner_relay.service import WEBHOOK_PATH, RelayHandler, RelayServer
 from runner_relay.state import load_runners
 from runner_relay.policy import Policy
@@ -91,6 +92,9 @@ class WebhookEndpointTest(unittest.TestCase):
         self.server.webhook_secret = SECRET
         self.server.dispatch_token = "dispatch-token"
         self.server.workflow_file = "relay-dispatch.yml"
+        self.server.capacity_lock = threading.Lock()
+        self.server.runner_reservations = {}
+        self.server.reservation_seconds = 10
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.port = self.server.server_address[1]
@@ -100,6 +104,12 @@ class WebhookEndpointTest(unittest.TestCase):
         self.server.server_close()
 
     def post(self, path: str, body: bytes, headers: dict[str, str]) -> tuple[int, dict]:
+        if self.server.github is not None:
+            list_runners = self.server.github.list_runners
+            if isinstance(list_runners.return_value, MagicMock) and list_runners.side_effect is None:
+                list_runners.return_value = (
+                    RepositoryRunner("papyrus-helmdeck-web", "online", ("self-hosted", "Linux", "ARM64")),
+                )
         conn = HTTPConnection("127.0.0.1", self.port, timeout=10)
         conn.request("POST", path, body=body, headers={"Content-Type": "application/json", **headers})
         response = conn.getresponse()
@@ -119,6 +129,7 @@ class WebhookEndpointTest(unittest.TestCase):
 
     def test_signed_delivery_for_allowed_repo_reaches_dispatch(self) -> None:
         body = push_body()
+        self.server.runners = ()
         with patch.object(self.server, "github") as github:
             status, payload = self.post(
                 WEBHOOK_PATH,
@@ -130,11 +141,175 @@ class WebhookEndpointTest(unittest.TestCase):
         self.assertEqual(payload["branch"], "main")
         # private repository with unknown quota must take the local lane
         self.assertEqual(payload["lane"], "fallback")
+        self.assertEqual(payload["capacity"]["source"], "github_repository_runners")
+        self.assertEqual(payload["capacity"]["registered"], 1)
+        self.assertEqual(payload["capacity"]["available"], 1)
+        self.assertEqual(payload["capacity"]["runner_candidate"], "papyrus-helmdeck-web")
         repository, workflow, ref, inputs = github.dispatch.call_args[0]
         self.assertEqual(repository, REPO)
         self.assertEqual(workflow, "relay-dispatch.yml")
         self.assertEqual(ref, "main")
         self.assertEqual(inputs["relay_lane"], "fallback")
+
+    def test_busy_repository_runner_prevents_local_dispatch(self) -> None:
+        body = push_body()
+        with patch.object(self.server, "github") as github:
+            github.list_runners.return_value = (
+                RepositoryRunner(
+                    "papyrus-helmdeck-web",
+                    "online",
+                    ("self-hosted", "Linux", "ARM64"),
+                    busy=True,
+                ),
+            )
+            status, payload = self.post(
+                WEBHOOK_PATH,
+                body,
+                {"X-Hub-Signature-256": sign(SECRET, body), "X-GitHub-Event": "push"},
+            )
+        self.assertEqual(status, 409)
+        self.assertIn("no local runner is eligible", payload["error"])
+        github.dispatch.assert_not_called()
+
+    def test_offline_repository_runner_is_ineligible(self) -> None:
+        body = push_body()
+        with patch.object(self.server, "github") as github:
+            github.list_runners.return_value = (
+                RepositoryRunner("papyrus-helmdeck-web", "offline", ("self-hosted", "Linux", "ARM64")),
+            )
+            status, payload = self.post(
+                WEBHOOK_PATH,
+                body,
+                {"X-Hub-Signature-256": sign(SECRET, body), "X-GitHub-Event": "push"},
+            )
+        self.assertEqual(status, 409)
+        self.assertIn("no local runner is eligible", payload["error"])
+        github.dispatch.assert_not_called()
+
+    def test_reservations_are_shared_across_overlapping_lanes(self) -> None:
+        body = push_body()
+        runner = RepositoryRunner(
+            "papyrus-helmdeck-web",
+            "online",
+            ("self-hosted", "Linux", "ARM64", "burst"),
+        )
+        burst_payload = json.dumps(
+            {
+                "repository": REPO,
+                "workflow": "relay-dispatch.yml",
+                "ref": "main",
+                "requested_lane": "burst",
+            }
+        ).encode()
+        with patch.object(self.server, "github") as github:
+            github.list_runners.return_value = (runner,)
+            push_status, _ = self.post(
+                WEBHOOK_PATH,
+                body,
+                {"X-Hub-Signature-256": sign(SECRET, body), "X-GitHub-Event": "push"},
+            )
+            burst_status, payload = self.post(
+                "/v1/dispatch",
+                burst_payload,
+                {"Authorization": "Bearer dispatch-token"},
+            )
+        self.assertEqual(push_status, 200)
+        self.assertEqual(burst_status, 409)
+        self.assertIn("reserved", payload["error"])
+        self.assertEqual(github.dispatch.call_count, 1)
+
+    def test_disjoint_device_reservations_do_not_block_each_other(self) -> None:
+        runners = (
+            RepositoryRunner("papyrus-helmdeck-web", "online", ("self-hosted", "Linux", "ARM64", "papyrus")),
+            RepositoryRunner("rover-helmdeck-web", "online", ("self-hosted", "Linux", "ARM64", "rover")),
+        )
+        with patch.object(self.server, "github") as github:
+            github.list_runners.return_value = runners
+            statuses = []
+            for target in ("papyrus", "rover"):
+                payload = json.dumps(
+                    {
+                        "repository": REPO,
+                        "workflow": "relay-dispatch.yml",
+                        "ref": "main",
+                        "requested_lane": "device",
+                        "target": target,
+                    }
+                ).encode()
+                status, _ = self.post(
+                    "/v1/dispatch",
+                    payload,
+                    {"Authorization": "Bearer dispatch-token"},
+                )
+                statuses.append(status)
+        self.assertEqual(statuses, [200, 200])
+        self.assertEqual(github.dispatch.call_count, 2)
+
+    def test_runner_lookup_failure_fails_closed(self) -> None:
+        body = push_body()
+        with patch.object(self.server, "github") as github:
+            github.list_runners.side_effect = GitHubAPIError("runner lookup unavailable")
+            status, payload = self.post(
+                WEBHOOK_PATH,
+                body,
+                {"X-Hub-Signature-256": sign(SECRET, body), "X-GitHub-Event": "push"},
+            )
+        self.assertEqual(status, 502)
+        self.assertIn("runner lookup unavailable", payload["error"])
+        github.dispatch.assert_not_called()
+
+    def test_failed_dispatch_releases_capacity_reservation(self) -> None:
+        body = push_body()
+        with patch.object(self.server, "github") as github:
+            github.dispatch.side_effect = RuntimeError("unexpected transport failure")
+            status, payload = self.post(
+                WEBHOOK_PATH,
+                body,
+                {"X-Hub-Signature-256": sign(SECRET, body), "X-GitHub-Event": "push"},
+            )
+        self.assertEqual(status, 502)
+        self.assertEqual(payload["error"], "GitHub dispatch failed")
+        self.assertFalse(self.server.runner_reservations.get(REPO))
+
+    def test_pending_dispatch_reserves_the_available_runner(self) -> None:
+        body = push_body()
+        headers = {"X-Hub-Signature-256": sign(SECRET, body), "X-GitHub-Event": "push"}
+        statuses: list[int] = []
+        start = threading.Barrier(3)
+
+        def dispatch() -> None:
+            start.wait()
+            status, _ = self.post(WEBHOOK_PATH, body, headers)
+            statuses.append(status)
+
+        with patch.object(self.server, "github") as github:
+            github.list_runners.return_value = (
+                RepositoryRunner("papyrus-helmdeck-web", "online", ("self-hosted", "Linux", "ARM64")),
+            )
+            requests = [threading.Thread(target=dispatch) for _ in range(2)]
+            for request in requests:
+                request.start()
+            start.wait()
+            for request in requests:
+                request.join()
+
+        self.assertCountEqual(statuses, [200, 409])
+        self.assertEqual(github.dispatch.call_count, 1)
+
+    def test_dispatch_uses_current_pool_capacity(self) -> None:
+        body = push_body()
+        headers = {"X-Hub-Signature-256": sign(SECRET, body), "X-GitHub-Event": "push"}
+        with patch.object(self.server, "github") as github:
+            github.list_runners.return_value = (
+                RepositoryRunner("papyrus-helmdeck-web", "online", ("self-hosted", "Linux", "ARM64")),
+                RepositoryRunner("rover-helmdeck-web", "online", ("self-hosted", "Linux", "ARM64")),
+            )
+            status_a, payload_a = self.post(WEBHOOK_PATH, body, headers)
+            status_b, payload_b = self.post(WEBHOOK_PATH, body, headers)
+        self.assertEqual((status_a, status_b), (200, 200))
+        self.assertEqual(payload_a["capacity"]["available"], 2)
+        self.assertEqual(payload_b["capacity"]["reserved"], 1)
+        self.assertEqual(payload_b["capacity"]["available"], 1)
 
     def test_public_repository_routes_to_hosted(self) -> None:
         body = push_body(private=False)
@@ -221,6 +396,25 @@ class WebhookEndpointTest(unittest.TestCase):
             status, body = self.post("/v1/dispatch", payload, {"Authorization": "Bearer dispatch-token"})
         self.assertEqual(status, 200)
         self.assertTrue(body["dispatched"])
+
+    def test_internal_dispatch_rejects_invalid_inputs_before_capacity_check(self) -> None:
+        payload = json.dumps(
+            {
+                "repository": REPO,
+                "workflow": "relay-dispatch.yml",
+                "ref": "main",
+                "inputs": ["invalid"],
+            }
+        ).encode()
+        with patch.object(self.server, "github") as github:
+            status, body = self.post(
+                "/v1/dispatch",
+                payload,
+                {"Authorization": "Bearer dispatch-token"},
+            )
+        self.assertEqual(status, 400)
+        self.assertIn("string-to-string", body["error"])
+        github.list_runners.assert_not_called()
 
     def test_unset_dispatch_token_refuses_rather_than_serving(self) -> None:
         self.server.dispatch_token = None

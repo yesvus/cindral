@@ -34,9 +34,12 @@ class RouteRequest:
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "RouteRequest":
         remaining = value.get("remaining_minutes")
+        target = value.get("target")
+        if target is not None and not isinstance(target, str):
+            raise ValueError("target must be a string")
         return cls(
             requested_lane=str(value.get("requested_lane", "auto")),
-            target=value.get("target"),
+            target=target,
             repository_visibility=str(value.get("repository_visibility", "private")),
             quota_status=str(value.get("quota_status", "unknown")),
             remaining_minutes=float(remaining) if remaining is not None else None,
@@ -50,11 +53,15 @@ class RouteDecision:
     runs_on: tuple[str, ...]
     reason: str
     runner: str | None = None
+    capacity: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "lane": self.lane,
             "runs_on": list(self.runs_on),
             "reason": self.reason,
             "runner": self.runner,
         }
+        if self.capacity is not None:
+            result["capacity"] = self.capacity
+        return result
