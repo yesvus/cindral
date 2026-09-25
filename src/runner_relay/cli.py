@@ -68,10 +68,24 @@ def main() -> None:
             else:
                 labels = ", ".join(lane.required_labels)
                 print(f"  {lane.lane}: setup required (register a runner with labels: {labels})")
-        all_ready = not errors and all(lane.ready for lane in readiness)
-        print(f"Overall: {'ready' if all_ready else 'setup required'}")
-        if not all_ready:
+        # hosted and fallback are the lanes a dispatch actually uses by default.
+        # device and burst are opt-in extras that only exist where those runners
+        # are registered, so their absence is information, not a blocker.
+        by_lane = {lane.lane: lane for lane in readiness}
+        default_lanes = [by_lane[name] for name in ("hosted", "fallback") if name in by_lane]
+        default_ready = not errors and all(lane.ready for lane in default_lanes)
+        optional_missing = [lane.lane for lane in readiness if not lane.ready and lane not in default_lanes]
+        if errors:
+            print("Overall: adapter needs changes (see above)")
             raise SystemExit(1)
+        if default_ready:
+            print("Overall: ready to wire up (hosted and fallback lanes both resolve)")
+            if optional_missing:
+                print(f"Optional lanes not available in this repository: {', '.join(optional_missing)}")
+                print("  These are only used when a dispatch explicitly requests them.")
+            return
+        print("Overall: not ready, the default hosted/fallback path does not resolve")
+        raise SystemExit(1)
         return
 
     policy = Policy.load(args.policy)

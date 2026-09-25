@@ -83,7 +83,14 @@ class Policy:
         runner = self._first_eligible(runners, required)
         if runner is None:
             raise RouteUnavailable(f"no eligible runner for lane {lane}")
-        return RouteDecision(lane=lane, runs_on=runner.labels, reason=f"explicit {lane} lane selected", runner=runner.name)
+        # Emit the lane's own labels, not the labels of whichever runner the
+        # static state picked. GitHub scopes self-hosted runners to a single
+        # repository, so a runner name from fleet state does not exist in most
+        # repositories: the same runner is registered as server-app-arm64 in
+        # one repository and server-example-app-arm64 in another. Pinning runs_on to
+        # a fleet runner name makes the job queue forever. The broker decides the
+        # lane; GitHub picks the runner registered to the repository.
+        return RouteDecision(lane=lane, runs_on=tuple(required), reason=f"explicit {lane} lane selected", runner=runner.name)
 
     def _first_local(self, request: RouteRequest, runners: tuple[Runner, ...], reason: str) -> RouteDecision:
         for lane in self.local_priority:

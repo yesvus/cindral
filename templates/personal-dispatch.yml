@@ -38,7 +38,12 @@ jobs:
 
   fallback:
     if: inputs.relay_lane == 'fallback'
-    runs-on: [self-hosted, Linux, ARM64, fallback]
+    # No class label. GitHub scopes self-hosted runners to one repository, and
+    # the runner registered here is named per repository, so a "fallback" label
+    # matches nothing outside the one repository that happens to use it. The
+    # three labels below are the ones every self-hosted runner on this account
+    # actually carries.
+    runs-on: [self-hosted, Linux, ARM64]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
@@ -46,7 +51,9 @@ jobs:
 
   device:
     if: inputs.relay_lane == 'device' && (inputs.relay_target == 'desktop' || inputs.relay_target == 'laptop' || inputs.relay_target == 'phone')
-    runs-on: [self-hosted, Linux, ARM64, device, "${{ inputs.relay_target }}"]
+    # Selected by runner name, which is the label GitHub registers each device
+    # with, so no class label is needed.
+    runs-on: [self-hosted, Linux, ARM64, "${{ inputs.relay_target }}"]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
