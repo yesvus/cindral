@@ -65,6 +65,28 @@ with the target repository, workflow filename, ref, and repository-specific inpu
 
 No organization runner group or cross-repository runner scope is required. Repository-scoped runner registrations are managed separately.
 
+## Direct execution
+
+Repositories listed in `RELAY_DIRECT_REPOSITORIES` run on the device pool instead of dispatching the Actions adapter. A signed push to the default branch enqueues a job, posts a `pending` commit status, and waits for a device agent to claim it.
+
+Agents use:
+
+- `POST /v1/jobs/claim`
+- `POST /v1/jobs/{id}/renew`
+- `POST /v1/jobs/{id}/report`
+- `GET /v1/jobs/{id}`
+
+Leases are authoritative: a device holds a job until its lease expires, and an expired lease returns the job to the queue. Configuration:
+
+- `RELAY_JOBS_DB`: SQLite path; the queue stays off when unset.
+- `RELAY_AGENT_TOKEN`: bearer token agents present.
+- `RELAY_JOB_LEASE_SECONDS`: lease duration, default `300`.
+- `RELAY_JOB_TIMEOUT`: per-job timeout, default `3600`.
+- `RELAY_DIRECT_REPOSITORIES`: comma-separated `owner/name` list.
+- `RELAY_STATUS_CONTEXT`: commit status context, default `relay/ci`.
+
+The agent loop is in `src/runner_relay/agent.py`. Execution is injected as a callable, so the on-device Docker executor can be wired in without changing the loop.
+
 ## Repository boundaries
 
 - `cindral` owns policy, broker code, dispatch templates, and tests.
