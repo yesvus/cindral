@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 from .github import GitHubAPIError, GitHubClient, GitHubDispatchError, RepositoryRunner, is_repository_slug
+from .jobs import SUCCESS, JobStore
 from .models import RouteDecision, RouteRequest, Runner
 from .policy import Policy, RouteUnavailable
 from .state import load_runners
@@ -39,6 +40,12 @@ class CindralServer(ThreadingHTTPServer):
     capacity_lock: threading.Lock
     runner_reservations: dict[str, dict[int, tuple[float, tuple[str, ...]]]]
     reservation_seconds: int
+    jobs: JobStore | None = None
+    agent_token: str | None = None
+    lease_seconds: int = 300
+    job_timeout: int = 3600
+    direct_repositories: tuple[str, ...] = ()
+    status_context: str = "cindral/ci"
 
 
 class CindralHandler(BaseHTTPRequestHandler):
@@ -48,11 +55,17 @@ class CindralHandler(BaseHTTPRequestHandler):
         if self.path == "/healthz":
             self._send(200, {"status": "ok"})
             return
+        if self.path.split("?", 1)[0].startswith("/v1/jobs/"):
+            self._jobs()
+            return
         self._send(404, {"error": "not found"})
 
     def do_POST(self) -> None:
         if self.path == WEBHOOK_PATH:
             self._webhook()
+            return
+        if self.path.split("?", 1)[0].startswith("/v1/jobs"):
+            self._jobs()
             return
         if self.path not in {"/v1/route", "/v1/dispatch"}:
             self._send(404, {"error": "not found"})
@@ -275,6 +288,144 @@ class CindralHandler(BaseHTTPRequestHandler):
             return False
         return hmac.compare_digest(header[len(prefix):].strip(), expected)
 
+    def _agent_authorized(self) -> bool:
+        expected = self.server.agent_token
+        if not expected:
+            return False
+        header = self.headers.get("Authorization", "")
+        prefix = "Bearer "
+        if not header.startswith(prefix):
+            return False
+        return hmac.compare_digest(header[len(prefix):].strip(), expected)
+
+    def _read_json(self) -> dict[str, Any]:
+        length = int(self.headers.get("Content-Length", "0") or 0)
+        if length > MAX_BODY:
+            raise ValueError("payload too large")
+        body = self.rfile.read(length)
+        if not body:
+            return {}
+        value = json.loads(body)
+        if not isinstance(value, dict):
+            raise ValueError("body is not a JSON object")
+        return value
+
+    def _jobs(self) -> None:
+        store = self.server.jobs
+        if store is None:
+            self._send(503, {"error": "job queue is not configured"})
+            return
+        if not self._agent_authorized():
+            self._send(401, {"error": "job requests require a bearer token"})
+            return
+        path = self.path.split("?", 1)[0].rstrip("/")
+        try:
+            if path == "/v1/jobs/claim":
+                self._claim(store)
+                return
+            if path.startswith("/v1/jobs/"):
+                job_id, _, action = path[len("/v1/jobs/"):].partition("/")
+                if not job_id:
+                    self._send(404, {"error": "not found"})
+                    return
+                if action == "renew":
+                    self._renew(store, job_id)
+                    return
+                if action == "report":
+                    self._report(store, job_id)
+                    return
+                if action == "":
+                    self._job_status(store, job_id)
+                    return
+            self._send(404, {"error": "not found"})
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            self._send(400, {"error": str(exc)})
+
+    def _claim(self, store: JobStore) -> None:
+        payload = self._read_json()
+        device = str(payload["device"])
+        labels = [str(label) for label in payload.get("labels", [])]
+        lease = int(payload.get("lease_seconds", self.server.lease_seconds))
+        job = store.claim(device, labels, lease_seconds=lease)
+        if job is None:
+            self._send(204)
+            return
+        self._send(200, {"job": job.as_dict()})
+
+    def _renew(self, store: JobStore, job_id: str) -> None:
+        payload = self._read_json()
+        device = str(payload["device"])
+        lease = int(payload.get("lease_seconds", self.server.lease_seconds))
+        if not store.renew(job_id, device, lease_seconds=lease):
+            self._send(409, {"error": "job is not leased to this device"})
+            return
+        self._send(200, {"renewed": True, "id": job_id})
+
+    def _report(self, store: JobStore, job_id: str) -> None:
+        if store.get(job_id) is None:
+            self._send(404, {"error": "unknown job"})
+            return
+        payload = self._read_json()
+        device = str(payload["device"])
+        exit_code = int(payload["exit_code"])
+        try:
+            job = store.report(job_id, device, exit_code)
+        except ValueError as exc:
+            self._send(409, {"error": str(exc)})
+            return
+        self._send(200, {**job.as_dict(), "status_posted": self._post_job_status(job)})
+
+    def _job_status(self, store: JobStore, job_id: str) -> None:
+        job = store.get(job_id)
+        if job is None:
+            self._send(404, {"error": "unknown job"})
+            return
+        self._send(200, job.as_dict())
+
+    def _post_job_status(self, job: Any) -> bool:
+        github = self.server.github
+        if github is None:
+            return False
+        if job.status == SUCCESS:
+            state, description = "success", "device pool run passed"
+        else:
+            state, description = "failure", f"device pool run failed (exit {job.exit_code})"
+        try:
+            github.post_status(
+                job.repository, job.sha, state, description, context=self.server.status_context
+            )
+            return True
+        except GitHubAPIError:
+            return False
+
+    def _enqueue_direct(self, repository: str, sha: str, branch: str) -> None:
+        jobs = self.server.jobs
+        assert jobs is not None
+        job = jobs.enqueue(repository, sha, branch, timeout=self.server.job_timeout)
+        posted = False
+        if self.server.github is not None:
+            try:
+                self.server.github.post_status(
+                    repository,
+                    sha,
+                    "pending",
+                    "queued on the device pool",
+                    context=self.server.status_context,
+                )
+                posted = True
+            except GitHubAPIError:
+                posted = False
+        self._send(
+            202,
+            {
+                "queued": True,
+                "job": job.id,
+                "repository": repository,
+                "sha": sha,
+                "status_posted": posted,
+            },
+        )
+
     def _webhook(self) -> None:
         secret = self.server.webhook_secret
         if not secret:
@@ -306,6 +457,9 @@ class CindralHandler(BaseHTTPRequestHandler):
         branch = event.branch
         if not branch or branch != event.default_branch:
             self._send(202, {"status": "ignored", "reason": f"branch is not the default branch: {branch or event.ref}"})
+            return
+        if self.server.jobs is not None and event.repository in self.server.direct_repositories:
+            self._enqueue_direct(event.repository, event.after, branch)
             return
         if self.server.github is None:
             self._send(503, {"error": "GitHub dispatch token is not configured"})
@@ -419,7 +573,12 @@ class CindralHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         return
 
-    def _send(self, status: int, payload: dict[str, Any]) -> None:
+    def _send(self, status: int, payload: dict[str, Any] | None = None) -> None:
+        if payload is None:
+            self.send_response(status)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         body = json.dumps(payload).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -441,11 +600,24 @@ def serve(policy_path: str | Path, state_path: str | Path, host: str, port: int,
     server.reservation_seconds = int(os.environ.get("CINDRAL_RUNNER_RESERVATION_SECONDS", "10"))
     if server.reservation_seconds < 1:
         raise ValueError("CINDRAL_RUNNER_RESERVATION_SECONDS must be positive")
+    jobs_db = os.environ.get("CINDRAL_JOBS_DB")
+    server.jobs = JobStore(jobs_db) if jobs_db else None
+    server.agent_token = os.environ.get("CINDRAL_AGENT_TOKEN") or None
+    server.lease_seconds = int(os.environ.get("CINDRAL_JOB_LEASE_SECONDS", "300"))
+    server.job_timeout = int(os.environ.get("CINDRAL_JOB_TIMEOUT", "3600"))
+    server.direct_repositories = tuple(
+        repository.strip()
+        for repository in os.environ.get("CINDRAL_DIRECT_REPOSITORIES", "").split(",")
+        if repository.strip()
+    )
+    server.status_context = os.environ.get("CINDRAL_STATUS_CONTEXT") or "cindral/ci"
     if not server.webhook_secret:
         # refuse loudly at startup rather than serving a path that 503s later
         print("warning: CINDRAL_WEBHOOK_SECRET is unset, /cindral/dispatch will refuse every delivery")
     if not server.dispatch_token:
         print("warning: CINDRAL_DISPATCH_TOKEN is unset, /v1/dispatch will refuse every request")
+    if server.jobs is not None and not server.agent_token:
+        print("warning: CINDRAL_JOBS_DB is set but CINDRAL_AGENT_TOKEN is unset, /v1/jobs will refuse every request")
     try:
         server.serve_forever()
     finally:
