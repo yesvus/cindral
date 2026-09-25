@@ -6,6 +6,7 @@ from http.client import HTTPConnection
 from pathlib import Path
 from unittest.mock import patch
 
+from cindral.github import RepositoryRunner
 from cindral.jobs import JobStore
 from cindral.policy import Policy
 from cindral.service import WEBHOOK_PATH, CindralHandler, CindralServer
@@ -14,7 +15,7 @@ from cindral.webhook import sign
 
 SECRET = "webhook-secret"
 AGENT_TOKEN = "agent-token"
-REPO = "yesvus/leotron-yesvus"
+REPO = "example-org/example-app"
 
 
 def push_body(private=True):
@@ -38,6 +39,9 @@ class JobEndpointTest(unittest.TestCase):
         self.server.webhook_secret = SECRET
         self.server.dispatch_token = "dispatch-token"
         self.server.workflow_file = "cindral-dispatch.yml"
+        self.server.capacity_lock = threading.Lock()
+        self.server.runner_reservations = {}
+        self.server.reservation_seconds = 10
         self.server.jobs = JobStore(str(Path(self._tmp.name) / "jobs.db"))
         self.server.agent_token = AGENT_TOKEN
         self.server.direct_repositories = (REPO,)
@@ -71,50 +75,50 @@ class JobEndpointTest(unittest.TestCase):
         return response.status, (json.loads(raw) if raw else {})
 
     def test_claim_requires_a_bearer_token(self) -> None:
-        status, _ = self.call("POST", "/v1/jobs/claim", {"device": "gurbet"}, authorize=False)
+        status, _ = self.call("POST", "/v1/jobs/claim", {"device": "server"}, authorize=False)
         self.assertEqual(status, 401)
 
     def test_claim_returns_no_content_when_queue_is_empty(self) -> None:
-        status, payload = self.call("POST", "/v1/jobs/claim", {"device": "gurbet"})
+        status, payload = self.call("POST", "/v1/jobs/claim", {"device": "server"})
         self.assertEqual(status, 204)
         self.assertEqual(payload, {})
 
     def test_claim_and_report_round_trip(self) -> None:
         enqueued = self.server.jobs.enqueue(REPO, "abc123", "main", labels=("arm64",))
-        status, payload = self.call("POST", "/v1/jobs/claim", {"device": "gurbet", "labels": ["arm64"]})
+        status, payload = self.call("POST", "/v1/jobs/claim", {"device": "server", "labels": ["arm64"]})
         self.assertEqual(status, 200)
         self.assertEqual(payload["job"]["id"], enqueued.id)
         self.assertEqual(payload["job"]["sha"], "abc123")
-        status, payload = self.call("POST", f"/v1/jobs/{enqueued.id}/report", {"device": "gurbet", "exit_code": 0})
+        status, payload = self.call("POST", f"/v1/jobs/{enqueued.id}/report", {"device": "server", "exit_code": 0})
         self.assertEqual(status, 200)
         self.assertEqual(payload["status"], "success")
         self.assertFalse(payload["status_posted"])
 
     def test_claim_skips_jobs_the_device_cannot_match(self) -> None:
         self.server.jobs.enqueue(REPO, "abc123", "main", labels=("arm64",))
-        status, _ = self.call("POST", "/v1/jobs/claim", {"device": "gurbet", "labels": ["x64"]})
+        status, _ = self.call("POST", "/v1/jobs/claim", {"device": "server", "labels": ["x64"]})
         self.assertEqual(status, 204)
 
     def test_renew_rejects_the_wrong_device(self) -> None:
         job = self.server.jobs.enqueue(REPO, "abc123", "main")
-        self.server.jobs.claim("gurbet", [])
-        status, _ = self.call("POST", f"/v1/jobs/{job.id}/renew", {"device": "zombie"})
+        self.server.jobs.claim("server", [])
+        status, _ = self.call("POST", f"/v1/jobs/{job.id}/renew", {"device": "burst"})
         self.assertEqual(status, 409)
-        status, payload = self.call("POST", f"/v1/jobs/{job.id}/renew", {"device": "gurbet"})
+        status, payload = self.call("POST", f"/v1/jobs/{job.id}/renew", {"device": "server"})
         self.assertEqual(status, 200)
         self.assertTrue(payload["renewed"])
 
     def test_report_rejects_a_job_leased_to_another_device(self) -> None:
         job = self.server.jobs.enqueue(REPO, "abc123", "main")
-        self.server.jobs.claim("gurbet", [])
-        status, _ = self.call("POST", f"/v1/jobs/{job.id}/report", {"device": "zombie", "exit_code": 0})
+        self.server.jobs.claim("server", [])
+        status, _ = self.call("POST", f"/v1/jobs/{job.id}/report", {"device": "burst", "exit_code": 0})
         self.assertEqual(status, 409)
 
     def test_report_posts_a_failure_commit_status(self) -> None:
         job = self.server.jobs.enqueue(REPO, "abc123", "main")
-        self.server.jobs.claim("gurbet", [])
+        self.server.jobs.claim("server", [])
         with patch.object(self.server, "github") as github:
-            status, payload = self.call("POST", f"/v1/jobs/{job.id}/report", {"device": "gurbet", "exit_code": 7})
+            status, payload = self.call("POST", f"/v1/jobs/{job.id}/report", {"device": "server", "exit_code": 7})
         self.assertEqual(status, 200)
         self.assertEqual(payload["status"], "failure")
         self.assertTrue(payload["status_posted"])
@@ -123,9 +127,9 @@ class JobEndpointTest(unittest.TestCase):
 
     def test_successful_report_posts_a_success_commit_status(self) -> None:
         job = self.server.jobs.enqueue(REPO, "abc123", "main")
-        self.server.jobs.claim("gurbet", [])
+        self.server.jobs.claim("server", [])
         with patch.object(self.server, "github") as github:
-            _, payload = self.call("POST", f"/v1/jobs/{job.id}/report", {"device": "gurbet", "exit_code": 0})
+            _, payload = self.call("POST", f"/v1/jobs/{job.id}/report", {"device": "server", "exit_code": 0})
         self.assertTrue(payload["status_posted"])
         self.assertEqual(github.post_status.call_args[0][2], "success")
 
@@ -161,6 +165,13 @@ class JobEndpointTest(unittest.TestCase):
         body = push_body()
         with patch.object(self.server, "github") as github:
             github.workflow_exists.return_value = True
+            github.list_runners.return_value = (
+                RepositoryRunner(
+                    "desktop-example-web",
+                    "online",
+                    ("self-hosted", "Linux", "ARM64", "fallback"),
+                ),
+            )
             status, payload = self.deliver(
                 body,
                 {"X-Hub-Signature-256": sign(SECRET, body), "X-GitHub-Event": "push"},

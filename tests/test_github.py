@@ -131,12 +131,12 @@ class GitHubClientTest(unittest.TestCase):
     def test_post_status_uses_statuses_api(self, urlopen) -> None:
         urlopen.return_value = Response()
         GitHubClient("token").post_status(
-            "yesvus/leotron-yesvus", "abc123", "success", "ci passed", target_url="https://relay.example/run/1"
+            "example-org/example-app", "abc123", "success", "ci passed", target_url="https://relay.example/run/1"
         )
         request = urlopen.call_args.args[0]
         self.assertEqual(
             request.full_url,
-            "https://api.github.com/repos/yesvus/leotron-yesvus/statuses/abc123",
+            "https://api.github.com/repos/example-org/example-app/statuses/abc123",
         )
         self.assertEqual(request.get_method(), "POST")
         payload = json.loads(request.data)
@@ -146,11 +146,11 @@ class GitHubClientTest(unittest.TestCase):
 
     def test_post_status_rejects_invalid_state_and_repository(self) -> None:
         with self.assertRaises(ValueError):
-            GitHubClient("token").post_status("yesvus/waymux", "abc123", "done")
+            GitHubClient("token").post_status("example-org/example-app", "abc123", "done")
         with self.assertRaises(ValueError):
             GitHubClient("token").post_status("../repo", "abc123", "success")
         with self.assertRaises(ValueError):
-            GitHubClient("token").post_status("yesvus/waymux", "", "success")
+            GitHubClient("token").post_status("example-org/example-app", "", "success")
 
     @patch("cindral.github.urlopen")
     def test_post_status_surfaces_github_errors(self, urlopen) -> None:
@@ -158,7 +158,7 @@ class GitHubClientTest(unittest.TestCase):
 
         urlopen.side_effect = HTTPError("url", 403, "forbidden", {}, None)
         with self.assertRaises(GitHubAPIError):
-            GitHubClient("token").post_status("yesvus/waymux", "abc123", "failure")
+            GitHubClient("token").post_status("example-org/example-app", "abc123", "failure")
 
 
 if __name__ == "__main__":
