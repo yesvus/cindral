@@ -9,7 +9,7 @@ When asked to wire Runner Relay to a repository, make the repository use the sha
 3. Add a `route` job using `yesvus/runner-relay/.github/workflows/route.yml@main`.
 4. Make real work depend on the route output:
    `runs-on: ${{ fromJSON(needs.route.outputs.runs_on) }}`.
-5. Keep hosted execution as the default lane.
+5. Keep hosted execution as the default lane when quota is available; use local fallback when private-repository quota is exhausted or unknown.
 6. Use explicit lanes only for trusted, selected work.
 7. Keep untrusted pull-request code off self-hosted runners.
 8. Never add a rerun of ordinary test failures on another runner.
@@ -32,12 +32,13 @@ Run the steps sequentially on resource-limited runners. Use separate lint, test,
 
 ## Trust and quota rules
 
-- Public repositories and untrusted pull requests use GitHub-hosted runners.
+- Public repositories use GitHub-hosted runners.
+- Private repositories use hosted runners only when quota is explicitly available.
 - Self-hosted lanes are for trusted branches, trusted maintainer events, and explicit device work.
 - `fallback` is a last-resort lane, not the default build lane.
 - `burst` is selected explicitly.
-- Hosted quota exhaustion may select a local fallback before a job starts. A test failure does not trigger fallback selection.
-- Unknown quota state preserves hosted-first behavior.
+- Hosted quota exhaustion or unknown quota may select a local fallback before a job starts. A test failure does not trigger fallback selection.
+- Unknown private-repository quota defaults to local fallback.
 
 ## Package manager detection
 

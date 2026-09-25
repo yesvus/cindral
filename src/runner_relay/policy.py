@@ -20,6 +20,7 @@ class Policy:
     minimum_remaining_minutes: float
     reserve_minutes: float
     paid_overage: str
+    unknown_quota: str
 
     @classmethod
     def load(cls, path: str | Path) -> "Policy":
@@ -40,6 +41,7 @@ class Policy:
             minimum_remaining_minutes=float(quota.get("minimum_remaining_minutes", 20)),
             reserve_minutes=float(quota.get("reserve_minutes", 10)),
             paid_overage=str(quota.get("paid_overage", "deny")),
+            unknown_quota=str(quota.get("unknown_quota", "local")),
         )
 
     def choose(self, request: RouteRequest, runners: tuple[Runner, ...]) -> RouteDecision:
@@ -51,17 +53,20 @@ class Policy:
             return self._hosted("public repository uses hosted runners")
         if self._hosted_quota_available(request):
             return self._hosted("hosted quota is available")
-        return self._first_local(request, runners, "hosted quota is exhausted")
+        reason = "hosted quota is unknown" if request.quota_status == "unknown" else "hosted quota is exhausted"
+        return self._first_local(request, runners, reason)
 
     def _hosted_quota_available(self, request: RouteRequest) -> bool:
         if request.quota_status in {"available", "paid_allowed"}:
-            return True
+            if request.remaining_minutes is None:
+                return True
+            return request.remaining_minutes - request.estimated_minutes - self.reserve_minutes >= self.minimum_remaining_minutes
         if request.quota_status == "unknown":
-            return True
+            return self.unknown_quota == "hosted"
         if request.quota_status == "exhausted":
             return self.paid_overage == "allow"
         if request.remaining_minutes is None:
-            return True
+            return False
         return request.remaining_minutes - request.estimated_minutes - self.reserve_minutes >= self.minimum_remaining_minutes
 
     def _hosted(self, reason: str) -> RouteDecision:
