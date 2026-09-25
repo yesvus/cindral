@@ -12,6 +12,7 @@ The default policy is in [`config/policy.toml`](config/policy.toml). Package-man
 - Private repositories use hosted runners while quota is explicitly available.
 - Exhausted or unknown private-repository quota selects the first healthy local fallback.
 - Explicit `device`, `burst`, and `fallback` lanes are supported.
+- Before local dispatch, Relay checks the target repository's live runner registrations and busy state, then reserves capacity while GitHub assigns the job.
 - Ordinary test failures never trigger a rerun on another runner.
 
 The policy engine is deterministic and receives runner state as data. It does not execute repository code and does not store credentials.

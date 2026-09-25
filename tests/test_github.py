@@ -102,7 +102,17 @@ class GitHubClientTest(unittest.TestCase):
         )
         self.assertEqual(request.get_method(), "GET")
         self.assertEqual(runners[0].name, "papyrus")
+        self.assertFalse(runners[0].busy)
         self.assertEqual(runners[0].labels, ("self-hosted", "device"))
+
+    @patch("runner_relay.github.urlopen")
+    def test_list_runners_preserves_busy_capacity(self, urlopen) -> None:
+        urlopen.return_value = Response(
+            b'{"runners":[{"name":"papyrus","status":"online","busy":true,'
+            b'"labels":[{"name":"self-hosted"}]}]}'
+        )
+        runners = GitHubClient("token").list_runners("yesvus/waymux")
+        self.assertTrue(runners[0].busy)
 
     def test_list_runners_rejects_invalid_repository(self) -> None:
         for repository in ("https://example.com/owner/repo", "../repo"):

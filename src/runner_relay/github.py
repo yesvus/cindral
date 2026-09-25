@@ -20,6 +20,7 @@ class RepositoryRunner:
     name: str
     status: str
     labels: tuple[str, ...]
+    busy: bool = False
 
 
 def is_repository_slug(repository: str) -> bool:
@@ -209,6 +210,7 @@ class GitHubClient:
                     RepositoryRunner(
                         name=str(item["name"]),
                         status=str(item.get("status", "offline")),
+                        busy=bool(item.get("busy", False)),
                         labels=tuple(str(label["name"]) for label in item.get("labels", [])),
                     )
                     for item in page_runners
