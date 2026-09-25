@@ -15,6 +15,9 @@ class GitHubAPIError(RuntimeError):
     """Raised when a GitHub API request fails."""
 
 
+STATUS_STATES = ("error", "failure", "pending", "success")
+
+
 @dataclass(frozen=True)
 class RepositoryRunner:
     name: str
@@ -220,3 +223,46 @@ class GitHubClient:
             if len(page_runners) < 100:
                 return tuple(runners)
             page += 1
+
+    def post_status(
+        self,
+        repository: str,
+        sha: str,
+        state: str,
+        description: str = "",
+        context: str = "cindral/ci",
+        target_url: str = "",
+    ) -> None:
+        if not is_repository_slug(repository):
+            raise ValueError("repository must use the owner/name format")
+        if state not in STATUS_STATES:
+            raise ValueError(f"invalid status state: {state}")
+        if not sha:
+            raise ValueError("status requires a commit sha")
+        url = f"{self.api_url}/repos/{quote(repository, safe='/')}/statuses/{quote(sha, safe='')}"
+        payload: dict[str, str] = {
+            "state": state,
+            "description": description[:140],
+            "context": context,
+        }
+        if target_url:
+            payload["target_url"] = target_url
+        request = Request(
+            url,
+            data=json.dumps(payload).encode(),
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=30):
+                pass
+        except HTTPError as exc:
+            detail = exc.read().decode(errors="replace")
+            raise GitHubAPIError(f"GitHub status update failed with HTTP {exc.code}: {detail}") from exc
+        except URLError as exc:
+            raise GitHubAPIError(f"GitHub status update failed: {exc.reason}") from exc
