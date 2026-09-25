@@ -11,17 +11,12 @@ unknown_quota = "local"
 priority = ["fallback"]
 device_priority = ["papyrus", "rover", "colak"]
 
-# Lane labels are matched against the runners registered to the repository the
-# job runs in, not against fleet state. Every self-hosted runner on this account
-# is ARM64 and carries exactly these three labels, so a lane that adds a class
-# label of its own ("fallback", "device") matches nothing and the job queues
-# forever. The burst lane is the exception: zombie-burst really is registered
-# with a "burst" label, so that one keeps it.
+# Fallback requires its own custom label so GitHub cannot assign this lane to a
+# runner registered only for a device target.
 [lanes.fallback]
-labels = ["self-hosted", "Linux", "ARM64"]
+labels = ["self-hosted", "Linux", "ARM64", "fallback"]
 
-# Device lanes are selected by target, so the runner name is appended per
-# request and the class label is not needed here.
+# Device lanes are selected by target, so the runner name is appended per request.
 [lanes.device]
 labels = ["self-hosted", "Linux", "ARM64"]
 
