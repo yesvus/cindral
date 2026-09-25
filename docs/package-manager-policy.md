@@ -10,9 +10,9 @@ Current local examples:
 
 | Repository | Package manager | Evidence |
 | --- | --- | --- |
-| `leotron` | pnpm | `packageManager`, `pnpm-lock.yaml`, `preinstall: only-allow pnpm` |
-| `helmdeck` | pnpm | `packageManager`, `pnpm-lock.yaml` |
-| `birtedcom` | pnpm | `packageManager`, `pnpm-lock.yaml` |
+| `example-app` | pnpm | `packageManager`, `pnpm-lock.yaml`, `preinstall: only-allow pnpm` |
+| `example-web` | pnpm | `packageManager`, `pnpm-lock.yaml` |
+| `example-store` | pnpm | `packageManager`, `pnpm-lock.yaml` |
 | `opencode-telegram-bot` | npm | `package-lock.json`, repository instructions |
 
 `opencode-telegram-bot` is an intentional repository-level exception. Keep its npm workflow until the repository explicitly migrates its lockfile and instructions.

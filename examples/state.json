@@ -1,32 +1,32 @@
 {
   "runners": [
     {
-      "name": "gurbet",
+      "name": "server",
       "status": "online",
       "busy": false,
       "healthy": true,
-      "labels": ["self-hosted", "Linux", "ARM64", "gurbet", "fallback"]
+      "labels": ["self-hosted", "Linux", "ARM64", "server", "fallback"]
     },
     {
-      "name": "papyrus",
+      "name": "desktop",
       "status": "online",
       "busy": false,
       "healthy": true,
-      "labels": ["self-hosted", "Linux", "ARM64", "papyrus", "device"]
+      "labels": ["self-hosted", "Linux", "ARM64", "desktop", "device"]
     },
     {
-      "name": "rover",
+      "name": "laptop",
       "status": "online",
       "busy": false,
       "healthy": true,
-      "labels": ["self-hosted", "Linux", "ARM64", "rover", "device"]
+      "labels": ["self-hosted", "Linux", "ARM64", "laptop", "device"]
     },
     {
-      "name": "zombie-burst",
+      "name": "burst-node",
       "status": "online",
       "busy": false,
       "healthy": true,
-      "labels": ["self-hosted", "Linux", "ARM64", "zombie", "burst"]
+      "labels": ["self-hosted", "Linux", "ARM64", "burst"]
     }
   ]
 }

@@ -61,7 +61,7 @@ workflows and runners and manage repository webhooks. Without
 
 The adapter path defaults to `.github/workflows/cindral-dispatch.yml` under
 `--checkout`. The webhook URL defaults to
-`https://hook.yesvus.com/cindral/dispatch`; use `--webhook-url` to override it.
+`https://cindral.example.com/cindral/dispatch`; use `--webhook-url` to override it.
 The webhook secret is read from `CINDRAL_WEBHOOK_SECRET` and is never printed.
 Runner registration itself remains managed by the deployment.
 

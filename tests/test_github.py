@@ -23,9 +23,9 @@ class GitHubClientTest(unittest.TestCase):
     @patch("cindral.github.urlopen")
     def test_dispatch_uses_workflow_dispatch_api(self, urlopen) -> None:
         urlopen.return_value = Response()
-        GitHubClient("token").dispatch("yesvus/waymux", "ci.yml", "main", {"cindral_lane": "fallback"})
+        GitHubClient("token").dispatch("example-org/example-app", "ci.yml", "main", {"cindral_lane": "fallback"})
         request = urlopen.call_args.args[0]
-        self.assertEqual(request.full_url, "https://api.github.com/repos/yesvus/waymux/actions/workflows/ci.yml/dispatches")
+        self.assertEqual(request.full_url, "https://api.github.com/repos/example-org/example-app/actions/workflows/ci.yml/dispatches")
         self.assertEqual(request.get_method(), "POST")
         self.assertIn("Bearer token", request.headers["Authorization"])
 
@@ -35,16 +35,16 @@ class GitHubClientTest(unittest.TestCase):
 
         urlopen.side_effect = HTTPError("url", 422, "bad input", {}, None)
         with self.assertRaises(GitHubDispatchError):
-            GitHubClient("token").dispatch("yesvus/waymux", "ci.yml", "main", {})
+            GitHubClient("token").dispatch("example-org/example-app", "ci.yml", "main", {})
 
     @patch("cindral.github.urlopen")
     def test_workflow_lookup_uses_repository_actions_api(self, urlopen) -> None:
         urlopen.return_value = Response()
-        self.assertTrue(GitHubClient("token").workflow_exists("yesvus/waymux", "cindral-dispatch.yml"))
+        self.assertTrue(GitHubClient("token").workflow_exists("example-org/example-app", "cindral-dispatch.yml"))
         request = urlopen.call_args.args[0]
         self.assertEqual(
             request.full_url,
-            "https://api.github.com/repos/yesvus/waymux/actions/workflows/cindral-dispatch.yml",
+            "https://api.github.com/repos/example-org/example-app/actions/workflows/cindral-dispatch.yml",
         )
         self.assertEqual(request.get_method(), "GET")
 
@@ -53,13 +53,13 @@ class GitHubClientTest(unittest.TestCase):
         from urllib.error import HTTPError
 
         urlopen.side_effect = HTTPError("url", 404, "not found", {}, None)
-        self.assertFalse(GitHubClient("token").workflow_exists("yesvus/waymux", "cindral-dispatch.yml"))
+        self.assertFalse(GitHubClient("token").workflow_exists("example-org/example-app", "cindral-dispatch.yml"))
 
     @patch("cindral.github.urlopen")
     def test_ensure_push_webhook_creates_hook_when_missing(self, urlopen) -> None:
         urlopen.side_effect = [Response(b"[]"), Response()]
         result = GitHubClient("token").ensure_push_webhook(
-            "yesvus/waymux", "https://hook.example/cindral/dispatch", "secret-value"
+            "example-org/example-app", "https://hook.example/cindral/dispatch", "secret-value"
         )
         self.assertEqual(result, "created")
         listing, create = [call.args[0] for call in urlopen.call_args_list]
@@ -77,41 +77,41 @@ class GitHubClientTest(unittest.TestCase):
             Response(),
         ]
         result = GitHubClient("token").ensure_push_webhook(
-            "yesvus/waymux", "https://hook.example/cindral/dispatch", "secret-value"
+            "example-org/example-app", "https://hook.example/cindral/dispatch", "secret-value"
         )
         self.assertEqual(result, "updated")
         request = urlopen.call_args_list[1].args[0]
-        self.assertEqual(request.full_url, "https://api.github.com/repos/yesvus/waymux/hooks/42")
+        self.assertEqual(request.full_url, "https://api.github.com/repos/example-org/example-app/hooks/42")
         self.assertEqual(request.get_method(), "PATCH")
 
     def test_ensure_push_webhook_requires_https(self) -> None:
         with self.assertRaises(ValueError):
-            GitHubClient("token").ensure_push_webhook("yesvus/waymux", "http://hook.example/cindral", "secret")
+            GitHubClient("token").ensure_push_webhook("example-org/example-app", "http://hook.example/cindral", "secret")
 
     @patch("cindral.github.urlopen")
     def test_list_runners_uses_repository_actions_api(self, urlopen) -> None:
         urlopen.return_value = Response(
-            b'{"runners":[{"name":"papyrus","status":"online","busy":false,'
+            b'{"runners":[{"name":"desktop","status":"online","busy":false,'
             b'"labels":[{"name":"self-hosted"},{"name":"device"}]}]}'
         )
-        runners = GitHubClient("token").list_runners("yesvus/waymux")
+        runners = GitHubClient("token").list_runners("example-org/example-app")
         request = urlopen.call_args.args[0]
         self.assertEqual(
             request.full_url,
-            "https://api.github.com/repos/yesvus/waymux/actions/runners?per_page=100&page=1",
+            "https://api.github.com/repos/example-org/example-app/actions/runners?per_page=100&page=1",
         )
         self.assertEqual(request.get_method(), "GET")
-        self.assertEqual(runners[0].name, "papyrus")
+        self.assertEqual(runners[0].name, "desktop")
         self.assertFalse(runners[0].busy)
         self.assertEqual(runners[0].labels, ("self-hosted", "device"))
 
     @patch("cindral.github.urlopen")
     def test_list_runners_preserves_busy_capacity(self, urlopen) -> None:
         urlopen.return_value = Response(
-            b'{"runners":[{"name":"papyrus","status":"online","busy":true,'
+            b'{"runners":[{"name":"desktop","status":"online","busy":true,'
             b'"labels":[{"name":"self-hosted"}]}]}'
         )
-        runners = GitHubClient("token").list_runners("yesvus/waymux")
+        runners = GitHubClient("token").list_runners("example-org/example-app")
         self.assertTrue(runners[0].busy)
 
     def test_list_runners_rejects_invalid_repository(self) -> None:
@@ -125,7 +125,7 @@ class GitHubClientTest(unittest.TestCase):
 
         urlopen.side_effect = HTTPError("url", 403, "forbidden", {}, None)
         with self.assertRaises(GitHubAPIError):
-            GitHubClient("token").list_runners("yesvus/waymux")
+            GitHubClient("token").list_runners("example-org/example-app")
 
 
 if __name__ == "__main__":

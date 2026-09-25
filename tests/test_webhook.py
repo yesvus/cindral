@@ -14,7 +14,7 @@ from cindral.policy import Policy
 from cindral.webhook import parse_pull_request_event, parse_push_event, sign, verify_signature, WebhookError
 
 SECRET = "shhh"
-REPO = "yesvus/leotron-yesvus"
+REPO = "example-org/example-app"
 
 
 def push_body(repository: str = REPO, private: bool = True, ref: str = "refs/heads/main", deleted: bool = False) -> bytes:
@@ -146,7 +146,7 @@ class WebhookEndpointTest(unittest.TestCase):
             if isinstance(list_runners.return_value, MagicMock) and list_runners.side_effect is None:
                 list_runners.return_value = (
                     RepositoryRunner(
-                        "papyrus-helmdeck-web",
+                        "desktop-example-web",
                         "online",
                         ("self-hosted", "Linux", "ARM64", "fallback"),
                     ),
@@ -185,7 +185,7 @@ class WebhookEndpointTest(unittest.TestCase):
         self.assertEqual(payload["capacity"]["source"], "github_repository_runners")
         self.assertEqual(payload["capacity"]["registered"], 1)
         self.assertEqual(payload["capacity"]["available"], 1)
-        self.assertEqual(payload["capacity"]["runner_candidate"], "papyrus-helmdeck-web")
+        self.assertEqual(payload["capacity"]["runner_candidate"], "desktop-example-web")
         repository, workflow, ref, inputs = github.dispatch.call_args[0]
         self.assertEqual(repository, REPO)
         self.assertEqual(workflow, "cindral-dispatch.yml")
@@ -197,7 +197,7 @@ class WebhookEndpointTest(unittest.TestCase):
         with patch.object(self.server, "github") as github:
             github.list_runners.return_value = (
                 RepositoryRunner(
-                    "papyrus-helmdeck-web",
+                    "desktop-example-web",
                     "online",
                     ("self-hosted", "Linux", "ARM64"),
                     busy=True,
@@ -216,7 +216,7 @@ class WebhookEndpointTest(unittest.TestCase):
         body = push_body()
         with patch.object(self.server, "github") as github:
             github.list_runners.return_value = (
-                RepositoryRunner("papyrus-helmdeck-web", "offline", ("self-hosted", "Linux", "ARM64")),
+                RepositoryRunner("desktop-example-web", "offline", ("self-hosted", "Linux", "ARM64")),
             )
             status, payload = self.post(
                 WEBHOOK_PATH,
@@ -230,7 +230,7 @@ class WebhookEndpointTest(unittest.TestCase):
     def test_reservations_are_shared_across_overlapping_lanes(self) -> None:
         body = push_body()
         runner = RepositoryRunner(
-            "papyrus-helmdeck-web",
+            "desktop-example-web",
             "online",
             ("self-hosted", "Linux", "ARM64", "fallback", "burst"),
         )
@@ -261,13 +261,13 @@ class WebhookEndpointTest(unittest.TestCase):
 
     def test_disjoint_device_reservations_do_not_block_each_other(self) -> None:
         runners = (
-            RepositoryRunner("papyrus-helmdeck-web", "online", ("self-hosted", "Linux", "ARM64", "papyrus")),
-            RepositoryRunner("rover-helmdeck-web", "online", ("self-hosted", "Linux", "ARM64", "rover")),
+            RepositoryRunner("desktop-example-web", "online", ("self-hosted", "Linux", "ARM64", "desktop")),
+            RepositoryRunner("laptop-example-web", "online", ("self-hosted", "Linux", "ARM64", "laptop")),
         )
         with patch.object(self.server, "github") as github:
             github.list_runners.return_value = runners
             statuses = []
-            for target in ("papyrus", "rover"):
+            for target in ("desktop", "laptop"):
                 payload = json.dumps(
                     {
                         "repository": REPO,
@@ -326,7 +326,7 @@ class WebhookEndpointTest(unittest.TestCase):
         with patch.object(self.server, "github") as github:
             github.list_runners.return_value = (
                 RepositoryRunner(
-                    "papyrus-helmdeck-web",
+                    "desktop-example-web",
                     "online",
                     ("self-hosted", "Linux", "ARM64", "fallback"),
                 ),
@@ -347,12 +347,12 @@ class WebhookEndpointTest(unittest.TestCase):
         with patch.object(self.server, "github") as github:
             github.list_runners.return_value = (
                 RepositoryRunner(
-                    "papyrus-helmdeck-web",
+                    "desktop-example-web",
                     "online",
                     ("self-hosted", "Linux", "ARM64", "fallback"),
                 ),
                 RepositoryRunner(
-                    "rover-helmdeck-web",
+                    "laptop-example-web",
                     "online",
                     ("self-hosted", "Linux", "ARM64", "fallback"),
                 ),
@@ -377,7 +377,7 @@ class WebhookEndpointTest(unittest.TestCase):
         self.assertEqual(github.dispatch.call_args[0][3]["cindral_lane"], "hosted")
 
     def test_repository_without_the_cindral_workflow_is_ignored(self) -> None:
-        body = push_body(repository="yesvus/other")
+        body = push_body(repository="example-org/other")
         with patch.object(self.server, "github") as github:
             github.workflow_exists.return_value = False
             status, payload = self.post(
@@ -402,7 +402,7 @@ class WebhookEndpointTest(unittest.TestCase):
             {
                 "ref": "refs/heads/master",
                 "after": "0" * 40,
-                "repository": {"full_name": "yesvus/birtedcom", "private": True, "default_branch": "master"},
+                "repository": {"full_name": "example-org/example-store", "private": True, "default_branch": "master"},
             }
         ).encode()
         with patch.object(self.server, "github") as github:

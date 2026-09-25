@@ -60,10 +60,10 @@ jobs:
       runner: '[\"self-hosted\",\"Linux\",\"ARM64\",\"fallback\"]'
       lane: fallback
   device:
-    if: inputs.cindral_lane == 'device' && (inputs.cindral_target == 'papyrus' || inputs.cindral_target == 'rover' || inputs.cindral_target == 'colak')
+    if: inputs.cindral_lane == 'device' && (inputs.cindral_target == 'desktop' || inputs.cindral_target == 'laptop' || inputs.cindral_target == 'phone')
     uses: ./.github/workflows/cindral-ci.yml
     with:
-      runner: ${{ inputs.cindral_target == 'papyrus' && '[\"self-hosted\",\"Linux\",\"ARM64\",\"papyrus\"]' || inputs.cindral_target == 'rover' && '[\"self-hosted\",\"Linux\",\"ARM64\",\"rover\"]' || '[\"self-hosted\",\"Linux\",\"ARM64\",\"colak\"]' }}
+      runner: ${{ inputs.cindral_target == 'desktop' && '[\"self-hosted\",\"Linux\",\"ARM64\",\"desktop\"]' || inputs.cindral_target == 'laptop' && '[\"self-hosted\",\"Linux\",\"ARM64\",\"laptop\"]' || '[\"self-hosted\",\"Linux\",\"ARM64\",\"phone\"]' }}
       lane: device
   burst:
     if: inputs.cindral_lane == 'burst'
@@ -128,15 +128,15 @@ jobs:
     def test_device_runner_does_not_make_fallback_lane_ready(self) -> None:
         runners = (
             RepositoryRunner(
-                "papyrus",
+                "desktop",
                 "online",
-                self.policy.lane_labels["device"] + ("papyrus",),
+                self.policy.lane_labels["device"] + ("desktop",),
             ),
         )
         readiness = {lane.lane: lane for lane in check_lane_readiness(self.policy, runners)}
         self.assertFalse(readiness["fallback"].ready)
-        self.assertTrue(readiness["device:papyrus"].ready)
-        self.assertFalse(readiness["device:rover"].ready)
+        self.assertTrue(readiness["device:desktop"].ready)
+        self.assertFalse(readiness["device:laptop"].ready)
         self.assertFalse(readiness["burst"].ready)
 
     @patch("cindral.cli.GitHubClient")
@@ -166,7 +166,7 @@ jobs:
         ):
             main()
         self.assertIn("Adapter: valid", output.getvalue())
-        self.assertIn("device:papyrus: ready", output.getvalue())
+        self.assertIn("device:desktop: ready", output.getvalue())
         self.assertIn("Overall: ready", output.getvalue())
 
     @patch("cindral.cli.GitHubClient")
@@ -180,7 +180,7 @@ jobs:
             patch.object(sys, "argv", [
                 "cindral",
                 "onboard",
-                "yesvus/waymux",
+                "example-org/example-app",
                 "--adapter",
                 str(ROOT / "templates/personal-dispatch.yml"),
                 "--register-webhook",
@@ -189,9 +189,9 @@ jobs:
             patch("sys.stdout", output),
         ):
             main()
-        github_client.return_value.workflow_exists.assert_called_once_with("yesvus/waymux", "cindral-dispatch.yml")
+        github_client.return_value.workflow_exists.assert_called_once_with("example-org/example-app", "cindral-dispatch.yml")
         github_client.return_value.ensure_push_webhook.assert_called_once_with(
-            "yesvus/waymux", "https://hook.yesvus.com/cindral/dispatch", "secret"
+            "example-org/example-app", "https://cindral.example.com/cindral/dispatch", "secret"
         )
         self.assertIn("Webhook: created", output.getvalue())
 
@@ -204,7 +204,7 @@ jobs:
             patch.object(sys, "argv", [
                 "cindral",
                 "onboard",
-                "yesvus/waymux",
+                "example-org/example-app",
                 "--adapter",
                 str(ROOT / "templates/personal-dispatch.yml"),
                 "--register-webhook",

@@ -9,7 +9,7 @@ class PolicyTest(unittest.TestCase):
         self.policy = Policy(
             hosted_runner=("ubuntu-24.04",),
             local_priority=("fallback", "device"),
-            device_priority=("papyrus", "rover", "colak"),
+            device_priority=("desktop", "laptop", "phone"),
             lane_labels={
                 "fallback": ("self-hosted", "Linux", "ARM64", "fallback"),
                 "device": ("self-hosted", "Linux", "ARM64", "device"),
@@ -21,9 +21,9 @@ class PolicyTest(unittest.TestCase):
             unknown_quota="local",
         )
         self.runners = (
-            Runner("gurbet", "online", False, ("self-hosted", "Linux", "ARM64", "fallback")),
-            Runner("papyrus", "online", False, ("self-hosted", "Linux", "ARM64", "papyrus", "device")),
-            Runner("zombie-burst", "online", False, ("self-hosted", "Linux", "ARM64", "burst")),
+            Runner("server", "online", False, ("self-hosted", "Linux", "ARM64", "fallback")),
+            Runner("desktop", "online", False, ("self-hosted", "Linux", "ARM64", "desktop", "device")),
+            Runner("burst-node", "online", False, ("self-hosted", "Linux", "ARM64", "burst")),
         )
 
     def test_available_quota_prefers_hosted(self) -> None:
@@ -44,16 +44,16 @@ class PolicyTest(unittest.TestCase):
     def test_unknown_private_quota_prefers_local_fallback(self) -> None:
         decision = self.policy.choose(RouteRequest(quota_status="unknown"), self.runners)
         self.assertEqual(decision.lane, "fallback")
-        self.assertEqual(decision.runner, "gurbet")
+        self.assertEqual(decision.runner, "server")
 
     def test_exhausted_quota_prefers_fallback(self) -> None:
         decision = self.policy.choose(RouteRequest(quota_status="exhausted"), self.runners)
         self.assertEqual(decision.lane, "fallback")
-        self.assertEqual(decision.runner, "gurbet")
+        self.assertEqual(decision.runner, "server")
 
     def test_explicit_burst_selects_burst_runner(self) -> None:
         decision = self.policy.choose(RouteRequest(requested_lane="burst"), self.runners)
-        self.assertEqual(decision.runner, "zombie-burst")
+        self.assertEqual(decision.runner, "burst-node")
 
     def test_explicit_device_requires_target(self) -> None:
         with self.assertRaisesRegex(RouteUnavailable, "requires an explicit target"):
@@ -61,7 +61,7 @@ class PolicyTest(unittest.TestCase):
 
     def test_auto_route_does_not_select_device_without_a_target(self) -> None:
         device_only = (
-            Runner("papyrus", "online", False, ("self-hosted", "Linux", "ARM64", "papyrus", "device")),
+            Runner("desktop", "online", False, ("self-hosted", "Linux", "ARM64", "desktop", "device")),
         )
         with self.assertRaises(RouteUnavailable):
             self.policy.choose(RouteRequest(quota_status="unknown"), device_only)
@@ -72,15 +72,15 @@ class PolicyTest(unittest.TestCase):
 
     def test_explicit_device_with_target_selects_matching_runner(self) -> None:
         decision = self.policy.choose(
-            RouteRequest(requested_lane="device", target="papyrus"),
+            RouteRequest(requested_lane="device", target="desktop"),
             self.runners,
         )
-        self.assertEqual(decision.runner, "papyrus")
+        self.assertEqual(decision.runner, "desktop")
 
     def test_unavailable_route_fails_before_job(self) -> None:
         with self.assertRaises(RouteUnavailable):
             self.policy.choose(
-                RouteRequest(requested_lane="device", target="colak"),
+                RouteRequest(requested_lane="device", target="phone"),
                 self.runners,
             )
 

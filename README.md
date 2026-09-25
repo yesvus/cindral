@@ -68,8 +68,8 @@ No organization runner group or cross-repository runner scope is required. Repos
 ## Repository boundaries
 
 - `cindral` owns policy, broker code, dispatch templates, and tests.
-- `ops` owns the Gurbet k3s deployment, resource limits, monitoring, and alerts.
-- `fleet` owns host identity, hardware metadata, and inventory tags.
+- `ops` owns the k3s deployment, resource limits, monitoring, and alerts.
+- the host inventory owns host identity, hardware metadata, and inventory tags.
 - GitHub repository-scoped runner registrations are managed by the broker.
 
 ## Versioning
@@ -90,4 +90,4 @@ python -m unittest discover -s tests -v
 python -m cindral.cli route --policy config/policy.toml --state examples/state.json --request examples/request.json
 ```
 
-The current implementation is the policy and service foundation. Live GitHub quota collection, Fleet/Beszel state ingestion, repository-scoped runner registration, and automatic repository migration are activation steps that belong in the Ops deployment and rollout plan.
+The current implementation is the policy and service foundation. Live GitHub quota collection, host inventory and Beszel state ingestion, repository-scoped runner registration, and automatic repository migration are activation steps that belong in the Ops deployment and rollout plan.

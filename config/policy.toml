@@ -9,7 +9,7 @@ unknown_quota = "local"
 
 [local]
 priority = ["fallback"]
-device_priority = ["papyrus", "rover", "colak"]
+device_priority = ["desktop", "laptop", "phone"]
 
 # Fallback requires its own custom label so GitHub cannot assign this lane to a
 # runner registered only for a device target.

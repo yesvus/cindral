@@ -54,7 +54,7 @@ jobs:
       - run: ./scripts/ci
 
   device:
-    if: inputs.cindral_lane == 'device' && (inputs.cindral_target == 'papyrus' || inputs.cindral_target == 'rover' || inputs.cindral_target == 'colak')
+    if: inputs.cindral_lane == 'device' && (inputs.cindral_target == 'desktop' || inputs.cindral_target == 'laptop' || inputs.cindral_target == 'phone')
     # Selected by runner name, which is the label GitHub registers each device
     # with, so no class label is needed.
     runs-on: [self-hosted, Linux, ARM64, "${{ inputs.cindral_target }}"]

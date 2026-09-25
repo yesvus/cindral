@@ -12,7 +12,7 @@ from .policy import Policy
 from .service import serve
 from .state import load_runners
 
-DEFAULT_WEBHOOK_URL = "https://hook.yesvus.com/cindral/dispatch"
+DEFAULT_WEBHOOK_URL = "https://cindral.example.com/cindral/dispatch"
 
 
 def main() -> None:

@@ -41,15 +41,15 @@ Run the steps sequentially on resource-limited runners. Use separate lint, test,
 
 ## Package manager detection
 
-Use the target repository's existing package manager. The fleet default is pnpm for product and web repositories, while repositories with an established npm workflow remain on npm until they explicitly migrate. Detect the package manager from repository instructions, `packageManager`, and the committed lockfile. Never switch lockfiles during integration.
+Use the target repository's existing package manager. The default is pnpm for product and web repositories, while repositories with an established npm workflow remain on npm until they explicitly migrate. Detect the package manager from repository instructions, `packageManager`, and the committed lockfile. Never switch lockfiles during integration.
 
 See [package manager policy](docs/package-manager-policy.md).
 
 ## Boundaries
 
 - Cindral owns routing policy and the reusable route workflow.
-- Ops owns the Gurbet deployment, resource limits, monitoring, and alerts.
-- Fleet owns host identity, hardware metadata, and inventory tags.
+- Ops owns the deployment, resource limits, monitoring, and alerts.
+- A host inventory service owns host identity, hardware metadata, and inventory tags.
 - The target repository owns its source code, dependency setup, test commands, build commands, and release credentials.
 
 Do not add credentials, registration tokens, or billing secrets to workflow files. Use GitHub environments, organization secrets, or the Ops deployment secret store.
