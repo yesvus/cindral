@@ -58,6 +58,29 @@ class GitHubClient:
         except URLError as exc:
             raise GitHubDispatchError(f"GitHub dispatch failed: {exc.reason}") from exc
 
+    def workflow_exists(self, repository: str, workflow: str) -> bool:
+        if not is_repository_slug(repository):
+            raise ValueError("repository must use the owner/name format")
+        url = f"{self.api_url}/repos/{quote(repository, safe='/')}/actions/workflows/{quote(workflow, safe='')}"
+        request = Request(
+            url,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {self.token}",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        try:
+            with urlopen(request, timeout=30):
+                return True
+        except HTTPError as exc:
+            if exc.code == 404:
+                return False
+            detail = exc.read().decode(errors="replace")
+            raise GitHubAPIError(f"GitHub workflow lookup failed with HTTP {exc.code}: {detail}") from exc
+        except URLError as exc:
+            raise GitHubAPIError(f"GitHub workflow lookup failed: {exc.reason}") from exc
+
     def list_runners(self, repository: str) -> tuple[RepositoryRunner, ...]:
         if not is_repository_slug(repository):
             raise ValueError("repository must use the owner/name format")

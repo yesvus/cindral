@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .github import GitHubClient, GitHubDispatchError
+from .github import GitHubAPIError, GitHubClient, GitHubDispatchError, is_repository_slug
 from .models import RouteRequest
 from .policy import Policy, RouteUnavailable
 from .state import load_runners
@@ -29,8 +29,6 @@ class RelayServer(ThreadingHTTPServer):
     github: GitHubClient | None
     webhook_secret: str | None
     dispatch_token: str | None
-    allowed_repositories: frozenset[str]
-    allowed_branches: frozenset[str]
     workflow_file: str
 
 
@@ -132,15 +130,22 @@ class RelayHandler(BaseHTTPRequestHandler):
         except WebhookError as exc:
             self._send(400, {"error": str(exc)})
             return
-        if event.repository not in self.server.allowed_repositories:
-            self._send(403, {"error": f"repository is not allowed: {event.repository}"})
+        if not is_repository_slug(event.repository):
+            self._send(400, {"error": "invalid repository name"})
             return
         branch = event.branch
-        if not branch or branch not in self.server.allowed_branches:
-            self._send(202, {"status": "ignored", "reason": f"branch not dispatched: {branch or event.ref}"})
+        if not branch or branch != event.default_branch:
+            self._send(202, {"status": "ignored", "reason": f"branch is not the default branch: {branch or event.ref}"})
             return
         if self.server.github is None:
             self._send(503, {"error": "GitHub dispatch token is not configured"})
+            return
+        try:
+            if not self.server.github.workflow_exists(event.repository, self.server.workflow_file):
+                self._send(202, {"status": "ignored", "reason": "repository has not opted in with the relay workflow"})
+                return
+        except GitHubAPIError as exc:
+            self._send(502, {"error": str(exc)})
             return
         # quota is deliberately unknown: only the caller knows the remaining
         # minutes, and the policy default for unknown quota is the local lane.
@@ -195,21 +200,13 @@ def serve(policy_path: str | Path, state_path: str | Path, host: str, port: int,
     server.github = GitHubClient(github_token) if github_token else None
     server.webhook_secret = os.environ.get("RELAY_WEBHOOK_SECRET") or None
     server.dispatch_token = os.environ.get("RELAY_DISPATCH_TOKEN") or None
-    server.allowed_repositories = _split_env("RELAY_ALLOWED_REPOSITORIES")
-    server.allowed_branches = _split_env("RELAY_ALLOWED_BRANCHES") or frozenset({"main"})
     server.workflow_file = os.environ.get("RELAY_WORKFLOW_FILE") or "relay-dispatch.yml"
     if not server.webhook_secret:
         # refuse loudly at startup rather than serving a path that 503s later
         print("warning: RELAY_WEBHOOK_SECRET is unset, /relay/dispatch will refuse every delivery")
     if not server.dispatch_token:
         print("warning: RELAY_DISPATCH_TOKEN is unset, /v1/dispatch will refuse every request")
-    if not server.allowed_repositories:
-        print("warning: RELAY_ALLOWED_REPOSITORIES is unset, /relay/dispatch will refuse every repository")
     try:
         server.serve_forever()
     finally:
         server.server_close()
-
-
-def _split_env(name: str) -> frozenset[str]:
-    return frozenset(item.strip() for item in os.environ.get(name, "").split(",") if item.strip())
