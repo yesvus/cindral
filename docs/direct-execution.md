@@ -1,9 +1,18 @@
 # Direct execution
 
 Repositories listed in `CINDRAL_DIRECT_REPOSITORIES` run their CI on the device
-pool instead of dispatching the Actions adapter. A signed push to the default
-branch enqueues a job on the broker, posts a `pending` commit status, and waits
-for a device agent to claim it. No GitHub Actions runner is involved.
+pool instead of dispatching the Actions adapter. No GitHub Actions runner is
+involved. Two events enqueue a job:
+
+- A signed push to the default branch, on the pushed commit.
+- A trusted same-repository pull request (`opened`, `reopened`, `synchronize`,
+  `ready_for_review`), on its merge commit, with the `cindral/ci` status posted
+  on the PR head commit.
+
+Trust boundary: only pull requests whose head repository is the target
+repository, whose author is an owner, member, or collaborator, and that are not
+drafts run on the device pool. Fork and untrusted pull requests stay on the
+hosted lane.
 
 ## Repository contract
 

@@ -28,6 +28,22 @@ def push_body(private=True):
     ).encode()
 
 
+def pull_request_body(head_repo=REPO, action="opened", number=42, author_association="OWNER"):
+    return json.dumps(
+        {
+            "action": action,
+            "number": number,
+            "repository": {"full_name": REPO, "private": True, "default_branch": "main"},
+            "pull_request": {
+                "author_association": author_association,
+                "draft": False,
+                "head": {"sha": "head123", "repo": {"full_name": head_repo}},
+                "merge_commit_sha": "merge123",
+            },
+        }
+    ).encode()
+
+
 class JobEndpointTest(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -159,6 +175,36 @@ class JobEndpointTest(unittest.TestCase):
         self.assertEqual(len(queued), 1)
         self.assertEqual(queued[0].sha, "abc123")
         self.assertEqual(queued[0].repository, REPO)
+
+    def test_trusted_pull_request_on_a_direct_repository_queues(self) -> None:
+        body = pull_request_body()
+        with patch.object(self.server, "github") as github:
+            status, payload = self.deliver(
+                body,
+                {"X-Hub-Signature-256": sign(SECRET, body), "X-GitHub-Event": "pull_request"},
+            )
+        self.assertEqual(status, 202)
+        self.assertTrue(payload["queued"])
+        self.assertEqual(payload["pull_request"], 42)
+        github.dispatch.assert_not_called()
+        self.assertEqual(github.post_status.call_args[0][1], "head123")
+        queued = self.server.jobs.list()
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0].sha, "merge123")
+        self.assertEqual(queued[0].ref, "refs/pull/42/merge")
+        self.assertEqual(queued[0].status_sha, "head123")
+
+    def test_fork_pull_request_on_a_direct_repository_stays_on_actions(self) -> None:
+        body = pull_request_body(head_repo="someone/example-app")
+        with patch.object(self.server, "github") as github:
+            github.workflow_exists.return_value = True
+            status, payload = self.deliver(
+                body,
+                {"X-Hub-Signature-256": sign(SECRET, body), "X-GitHub-Event": "pull_request"},
+            )
+        self.assertEqual(status, 200)
+        github.dispatch.assert_called_once()
+        self.assertEqual(self.server.jobs.list(), [])
 
     def test_push_to_a_non_direct_repository_still_dispatches(self) -> None:
         self.server.direct_repositories = ()

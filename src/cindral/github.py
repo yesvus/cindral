@@ -107,7 +107,9 @@ class GitHubClient:
         )
         payload = {
             "active": True,
-            "events": ["push"],
+            # pull_request deliveries let direct repositories queue trusted,
+            # same-repository PRs on the device pool
+            "events": ["push", "pull_request"],
             "config": {
                 "url": url,
                 "content_type": "json",

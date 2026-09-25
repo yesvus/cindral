@@ -1,6 +1,6 @@
 [project]
 name = "cindral"
-version = "0.8.0"
+version = "0.8.1"
 description = "Quota-aware GitHub Actions routing across hosted and self-hosted runners."
 requires-python = ">=3.11"
 dependencies = ["PyYAML>=6.0,<7"]

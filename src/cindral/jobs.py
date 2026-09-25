@@ -29,6 +29,7 @@ class Job:
     exit_code: int | None = None
     attempts: int = 0
     delivery: str | None = None
+    status_sha: str | None = None
     log: str = ""
 
     def as_dict(self) -> dict:
@@ -44,6 +45,7 @@ class Job:
             "device": self.device,
             "exit_code": self.exit_code,
             "attempts": self.attempts,
+            "status_sha": self.status_sha,
             "log": self.log,
         }
 
@@ -64,6 +66,7 @@ def _row(row: sqlite3.Row) -> Job:
         exit_code=row["exit_code"],
         attempts=int(row["attempts"]),
         delivery=row["delivery"],
+        status_sha=row["status_sha"],
         log=row["log"] or "",
     )
 
@@ -102,6 +105,7 @@ class JobStore:
                     exit_code INTEGER,
                     attempts INTEGER NOT NULL DEFAULT 0,
                     delivery TEXT,
+                    status_sha TEXT,
                     log TEXT
                 )
                 """
@@ -109,6 +113,8 @@ class JobStore:
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(jobs)")}
             if "log" not in columns:
                 connection.execute("ALTER TABLE jobs ADD COLUMN log TEXT")
+            if "status_sha" not in columns:
+                connection.execute("ALTER TABLE jobs ADD COLUMN status_sha TEXT")
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status, created_at)"
             )
@@ -127,6 +133,7 @@ class JobStore:
         labels: tuple[str, ...] | list[str] = (),
         timeout: int = 3600,
         delivery: str | None = None,
+        status_sha: str | None = None,
         now: float | None = None,
     ) -> Job:
         if not sha:
@@ -138,8 +145,8 @@ class JobStore:
             try:
                 connection.execute(
                     "INSERT INTO jobs"
-                    " (id, repository, sha, ref, command, labels, timeout, created_at, status, delivery)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " (id, repository, sha, ref, command, labels, timeout, created_at, status, delivery, status_sha)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         job_id,
                         repository,
@@ -151,6 +158,7 @@ class JobStore:
                         created,
                         PENDING,
                         delivery,
+                        status_sha,
                     ),
                 )
             except sqlite3.IntegrityError:
@@ -175,6 +183,7 @@ class JobStore:
             created_at=created,
             status=PENDING,
             delivery=delivery,
+            status_sha=status_sha,
         )
 
     def get(self, job_id: str) -> Job | None:
