@@ -75,6 +75,59 @@ Use one of these patterns:
 
 The broker is a dispatcher. It does not check out repository code or run repository commands.
 
+## Broker endpoints and their authentication
+
+Three paths, and they are not equally exposed. Only the first is meant to be
+public.
+
+| Path | Who may call it | Gate |
+| --- | --- | --- |
+| `POST /relay/dispatch` | GitHub, from a webhook | `X-Hub-Signature-256` HMAC, plus a repository and branch allowlist |
+| `POST /v1/dispatch` | operator, in-cluster | `Authorization: Bearer $RELAY_DISPATCH_TOKEN` |
+| `POST /v1/route` | operator, in-cluster | none, it only returns a decision and has no side effects |
+
+Every gate **fails closed**. If the relevant environment variable is unset the
+endpoint refuses the request rather than serving it, so a missing Secret cannot
+silently turn a gated endpoint into an open one. `serve` prints a warning at
+startup for each one that is unset.
+
+### `/relay/dispatch` is the public entry point
+
+It accepts a GitHub `push` payload and dispatches the repository's adapter on
+the lane the policy selects. Anything else is acknowledged and ignored:
+
+- a missing or wrong signature is `401`, and the comparison is constant-time
+- a repository outside `RELAY_ALLOWED_REPOSITORIES` is `403`
+- a branch outside `RELAY_ALLOWED_BRANCHES`, a tag, or a deleted ref is `202`
+  ignored, with no dispatch
+- a non-`push` event is `202` ignored
+
+Repository visibility is read from the payload, so a public repository still
+routes to hosted runners. Quota is deliberately reported as unknown, because
+only the caller knows the remaining minutes and the policy default for unknown
+quota is the local lane.
+
+A signature proves the delivery came from GitHub. It does not prove the sender
+was allowed to ask for that repository, which is what the allowlist is for. Both
+are required.
+
+### Required environment
+
+| Variable | Required for | Effect if unset |
+| --- | --- | --- |
+| `GITHUB_TOKEN` | any dispatch | `/v1/dispatch` and `/relay/dispatch` return `503` |
+| `RELAY_WEBHOOK_SECRET` | `/relay/dispatch` | returns `503` for every delivery |
+| `RELAY_DISPATCH_TOKEN` | `/v1/dispatch` | returns `401` for every request |
+| `RELAY_ALLOWED_REPOSITORIES` | `/relay/dispatch` | returns `403` for every repository |
+| `RELAY_ALLOWED_BRANCHES` | `/relay/dispatch` | defaults to `main` |
+| `RELAY_WORKFLOW_FILE` | `/relay/dispatch` | defaults to `relay-dispatch.yml` |
+
+`RELAY_ALLOWED_REPOSITORIES` and `RELAY_ALLOWED_BRANCHES` are comma-separated.
+
+Narrow `GITHUB_TOKEN` to the repositories in the allowlist with the `workflow`
+scope. A token that can reach every repository turns a routing bug into a
+cross-repository dispatch primitive.
+
 ## Quota behavior
 
 The broker prefers hosted execution for public repositories and whenever private-repository quota is explicitly available. If quota is exhausted or unknown and paid overage is disabled, it selects an eligible local fallback before dispatching the workflow.
