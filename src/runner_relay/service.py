@@ -406,6 +406,7 @@ class RelayHandler(BaseHTTPRequestHandler):
             200,
             {
                 **decision.as_dict(),
+                "reason": inputs["relay_reason"],
                 "dispatched": True,
                 "repository": event.repository,
                 "pull_request": event.number,

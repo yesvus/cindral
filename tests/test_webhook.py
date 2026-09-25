@@ -451,6 +451,7 @@ class WebhookEndpointTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertFalse(payload["trusted"])
         self.assertEqual(payload["lane"], "hosted")
+        self.assertEqual(payload["reason"], "untrusted pull request requires hosted execution")
         self.assertEqual(github.dispatch.call_args[0][3]["relay_lane"], "hosted")
 
     def test_public_pull_request_uses_hosted_lane(self) -> None:
@@ -476,7 +477,7 @@ class WebhookEndpointTest(unittest.TestCase):
         self.assertEqual(status, 401)
         github.dispatch.assert_not_called()
 
-    def test_open_pull_request_is_ignored(self) -> None:
+    def test_closed_pull_request_is_ignored(self) -> None:
         body = pull_request_body(action="closed")
         with patch.object(self.server, "github") as github:
             status, payload = self.post(
