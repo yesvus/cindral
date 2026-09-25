@@ -1,6 +1,6 @@
 # Package manager policy
 
-Runner Relay selects the execution lane. It does not impose a package manager on repositories.
+Cindral selects the execution lane. It does not impose a package manager on repositories.
 
 ## Default
 
@@ -26,7 +26,7 @@ For each repository, use the first available source of truth:
 3. The committed lockfile.
 4. The existing CI workflow.
 
-Never generate or switch a lockfile as part of Runner Relay integration.
+Never generate or switch a lockfile as part of Cindral integration.
 
 ## CI setup
 
@@ -94,6 +94,6 @@ A package-manager migration is a repository change. It requires:
 - replacing the lockfile intentionally,
 - verifying the CI workflow,
 - running the full repository checks,
-- and reviewing the dependency and script changes separately from Runner Relay integration.
+- and reviewing the dependency and script changes separately from Cindral integration.
 
 Do not migrate a working repository to npm only to make the fleet uniform. Consistency at the routing boundary is more valuable than forcing every repository to use the same package manager.

@@ -1,4 +1,4 @@
-"""Prepare a Runner Relay version bump without pushing."""
+"""Prepare a Cindral version bump without pushing."""
 import argparse
 from pathlib import Path
 import re

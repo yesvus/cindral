@@ -30,6 +30,6 @@ jobs:
       # dependency the Dockerfile forgets to install. That only surfaces when
       # the built image imports the module, which is how a missing PyYAML
       # reached a pushed tag while every test passed.
-      - run: docker build -t runner-relay:ci .
-      - run: docker run --rm runner-relay:ci --help
-      - run: docker run --rm --entrypoint python runner-relay:ci -c "import runner_relay.onboarding"
+      - run: docker build -t cindral:ci .
+      - run: docker run --rm cindral:ci --help
+      - run: docker run --rm --entrypoint python cindral:ci -c "import cindral.onboarding"
