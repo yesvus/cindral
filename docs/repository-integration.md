@@ -36,6 +36,17 @@ relay_reason
 
 The adapter should not call the broker recursively and should not accept arbitrary shell commands as dispatch inputs.
 
+## Onboarding check
+
+Run the onboarding check before enabling dispatch for a repository:
+
+```sh
+export GITHUB_TOKEN=...
+runner-relay onboard OWNER/REPOSITORY --adapter /path/to/checkout/.github/workflows/relay-dispatch.yml
+```
+
+Run from the Runner Relay checkout so the default policy is available. The token needs repository Administration read access. The command validates the adapter file against `config/policy.toml` and lists hosted, fallback, device, and burst lane readiness. Missing or offline registrations are reported with the labels each lane requires. Runner registration is performed through the deployment's managed process.
+
 ## pnpm contract
 
 A repository that wants one reliable command for constrained runners can define:

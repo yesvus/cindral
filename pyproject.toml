@@ -3,7 +3,7 @@ name = "runner-relay"
 version = "0.1.0"
 description = "Quota-aware GitHub Actions routing across hosted and self-hosted runners."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["PyYAML>=6.0,<7"]
 
 [project.scripts]
 runner-relay = "runner_relay.cli:main"
