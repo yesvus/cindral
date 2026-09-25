@@ -2,8 +2,27 @@
 [image]
 ref = "python:3.12-bookworm"
 
+[runner]
+docker = true
+
 [[steps]]
 run = "pip install --quiet -e ."
 
 [[steps]]
+run = "python -m compileall -q src"
+
+[[steps]]
 run = "python -m unittest discover -s tests"
+
+# Unit tests run against an editable install, so they cannot detect a
+# dependency the Dockerfile forgets to install. That only surfaces when the
+# built image imports the module, which is how a missing PyYAML reached a
+# pushed tag while every test passed.
+[[steps]]
+run = "docker build -t cindral:ci ."
+
+[[steps]]
+run = "docker run --rm cindral:ci --help"
+
+[[steps]]
+run = "docker run --rm --entrypoint python cindral:ci -c \"import cindral.onboarding\""
