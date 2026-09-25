@@ -25,11 +25,11 @@ from .webhook import (
     verify_signature,
 )
 
-WEBHOOK_PATH = "/relay/dispatch"
+WEBHOOK_PATH = "/cindral/dispatch"
 MAX_BODY = 1 << 20
 
 
-class RelayServer(ThreadingHTTPServer):
+class CindralServer(ThreadingHTTPServer):
     policy: Policy
     runners: tuple
     github: GitHubClient | None
@@ -41,8 +41,8 @@ class RelayServer(ThreadingHTTPServer):
     reservation_seconds: int
 
 
-class RelayHandler(BaseHTTPRequestHandler):
-    server: RelayServer
+class CindralHandler(BaseHTTPRequestHandler):
+    server: CindralServer
 
     def do_GET(self) -> None:
         if self.path == "/healthz":
@@ -122,9 +122,9 @@ class RelayHandler(BaseHTTPRequestHandler):
         inputs = dict(inputs)
         inputs.update(
             {
-                "relay_lane": decision.lane,
-                "relay_target": request.target or "",
-                "relay_reason": decision.reason,
+                "cindral_lane": decision.lane,
+                "cindral_target": request.target or "",
+                "cindral_reason": decision.reason,
             }
         )
         if not self._dispatch_to_github(repository, workflow, ref, inputs, reservation):
@@ -312,7 +312,7 @@ class RelayHandler(BaseHTTPRequestHandler):
             return
         try:
             if not self.server.github.workflow_exists(event.repository, self.server.workflow_file):
-                self._send(202, {"status": "ignored", "reason": "repository has not opted in with the relay workflow"})
+                self._send(202, {"status": "ignored", "reason": "repository has not opted in with the cindral workflow"})
                 return
         except GitHubAPIError as exc:
             self._send(502, {"error": str(exc)})
@@ -334,9 +334,9 @@ class RelayHandler(BaseHTTPRequestHandler):
             self._send(409, {"error": str(exc)})
             return
         inputs = {
-            "relay_lane": decision.lane,
-            "relay_target": request.target or "",
-            "relay_reason": decision.reason,
+            "cindral_lane": decision.lane,
+            "cindral_target": request.target or "",
+            "cindral_reason": decision.reason,
         }
         if not self._dispatch_to_github(
             event.repository,
@@ -374,7 +374,7 @@ class RelayHandler(BaseHTTPRequestHandler):
             return
         try:
             if not self.server.github.workflow_exists(event.repository, self.server.workflow_file):
-                self._send(202, {"status": "ignored", "reason": "repository has not opted in with the relay workflow"})
+                self._send(202, {"status": "ignored", "reason": "repository has not opted in with the cindral workflow"})
                 return
         except GitHubAPIError as exc:
             self._send(502, {"error": str(exc)})
@@ -390,12 +390,12 @@ class RelayHandler(BaseHTTPRequestHandler):
             self._send(409, {"error": str(exc)})
             return
         inputs = {
-            "relay_lane": decision.lane,
-            "relay_target": request.target or "",
-            "relay_reason": (
+            "cindral_lane": decision.lane,
+            "cindral_target": request.target or "",
+            "cindral_reason": (
                 decision.reason if event.trusted else "untrusted pull request requires hosted execution"
             ),
-            "relay_ref": event.ref,
+            "cindral_ref": event.ref,
         }
         try:
             self.server.github.dispatch(event.repository, self.server.workflow_file, event.default_branch, inputs)
@@ -406,7 +406,7 @@ class RelayHandler(BaseHTTPRequestHandler):
             200,
             {
                 **decision.as_dict(),
-                "reason": inputs["relay_reason"],
+                "reason": inputs["cindral_reason"],
                 "dispatched": True,
                 "repository": event.repository,
                 "pull_request": event.number,
@@ -429,23 +429,23 @@ class RelayHandler(BaseHTTPRequestHandler):
 
 
 def serve(policy_path: str | Path, state_path: str | Path, host: str, port: int, github_token: str | None = None) -> None:
-    server = RelayServer((host, port), RelayHandler)
+    server = CindralServer((host, port), CindralHandler)
     server.policy = Policy.load(policy_path)
     server.runners = load_runners(state_path)
     server.github = GitHubClient(github_token) if github_token else None
-    server.webhook_secret = os.environ.get("RELAY_WEBHOOK_SECRET") or None
-    server.dispatch_token = os.environ.get("RELAY_DISPATCH_TOKEN") or None
-    server.workflow_file = os.environ.get("RELAY_WORKFLOW_FILE") or "relay-dispatch.yml"
+    server.webhook_secret = os.environ.get("CINDRAL_WEBHOOK_SECRET") or None
+    server.dispatch_token = os.environ.get("CINDRAL_DISPATCH_TOKEN") or None
+    server.workflow_file = os.environ.get("CINDRAL_WORKFLOW_FILE") or "cindral-dispatch.yml"
     server.capacity_lock = threading.Lock()
     server.runner_reservations = {}
-    server.reservation_seconds = int(os.environ.get("RELAY_RUNNER_RESERVATION_SECONDS", "10"))
+    server.reservation_seconds = int(os.environ.get("CINDRAL_RUNNER_RESERVATION_SECONDS", "10"))
     if server.reservation_seconds < 1:
-        raise ValueError("RELAY_RUNNER_RESERVATION_SECONDS must be positive")
+        raise ValueError("CINDRAL_RUNNER_RESERVATION_SECONDS must be positive")
     if not server.webhook_secret:
         # refuse loudly at startup rather than serving a path that 503s later
-        print("warning: RELAY_WEBHOOK_SECRET is unset, /relay/dispatch will refuse every delivery")
+        print("warning: CINDRAL_WEBHOOK_SECRET is unset, /cindral/dispatch will refuse every delivery")
     if not server.dispatch_token:
-        print("warning: RELAY_DISPATCH_TOKEN is unset, /v1/dispatch will refuse every request")
+        print("warning: CINDRAL_DISPATCH_TOKEN is unset, /v1/dispatch will refuse every request")
     try:
         server.serve_forever()
     finally:

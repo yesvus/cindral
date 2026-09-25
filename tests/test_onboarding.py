@@ -6,10 +6,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from runner_relay.cli import main
-from runner_relay.github import RepositoryRunner
-from runner_relay.onboarding import check_lane_readiness, validate_adapter
-from runner_relay.policy import Policy
+from cindral.cli import main
+from cindral.github import RepositoryRunner
+from cindral.onboarding import check_lane_readiness, validate_adapter
+from cindral.policy import Policy
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,45 +29,45 @@ class OnboardingTest(unittest.TestCase):
         adapter = """on:
   workflow_dispatch:
     inputs:
-      relay_lane:
+      cindral_lane:
         required: true
         type: choice
         options: [hosted, fallback, device, burst]
-      relay_target:
+      cindral_target:
         type: string
-      relay_reason:
+      cindral_reason:
         type: string
-      relay_ref:
+      cindral_ref:
         required: false
         type: string
         default: ""
 permissions:
   contents: read
 concurrency:
-  group: relay-${{ github.ref }}
+  group: cindral-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   hosted:
-    if: inputs.relay_lane == 'hosted'
-    uses: ./.github/workflows/relay-ci.yml
+    if: inputs.cindral_lane == 'hosted'
+    uses: ./.github/workflows/cindral-ci.yml
     with:
       runner: '[\"ubuntu-24.04\"]'
       lane: hosted
   fallback:
-    if: inputs.relay_lane == 'fallback'
-    uses: ./.github/workflows/relay-ci.yml
+    if: inputs.cindral_lane == 'fallback'
+    uses: ./.github/workflows/cindral-ci.yml
     with:
       runner: '[\"self-hosted\",\"Linux\",\"ARM64\",\"fallback\"]'
       lane: fallback
   device:
-    if: inputs.relay_lane == 'device' && (inputs.relay_target == 'desktop' || inputs.relay_target == 'laptop' || inputs.relay_target == 'phone')
-    uses: ./.github/workflows/relay-ci.yml
+    if: inputs.cindral_lane == 'device' && (inputs.cindral_target == 'desktop' || inputs.cindral_target == 'laptop' || inputs.cindral_target == 'phone')
+    uses: ./.github/workflows/cindral-ci.yml
     with:
-      runner: ${{ inputs.relay_target == 'desktop' && '[\"self-hosted\",\"Linux\",\"ARM64\",\"desktop\"]' || inputs.relay_target == 'laptop' && '[\"self-hosted\",\"Linux\",\"ARM64\",\"laptop\"]' || '[\"self-hosted\",\"Linux\",\"ARM64\",\"phone\"]' }}
+      runner: ${{ inputs.cindral_target == 'desktop' && '[\"self-hosted\",\"Linux\",\"ARM64\",\"desktop\"]' || inputs.cindral_target == 'laptop' && '[\"self-hosted\",\"Linux\",\"ARM64\",\"laptop\"]' || '[\"self-hosted\",\"Linux\",\"ARM64\",\"phone\"]' }}
       lane: device
   burst:
-    if: inputs.relay_lane == 'burst'
-    uses: ./.github/workflows/relay-ci.yml
+    if: inputs.cindral_lane == 'burst'
+    uses: ./.github/workflows/cindral-ci.yml
     with:
       runner: '[\"self-hosted\",\"Linux\",\"ARM64\",\"burst\"]'
       lane: burst
@@ -92,28 +92,28 @@ jobs:
             root = Path(directory)
             workflows = root / ".github/workflows"
             workflows.mkdir(parents=True)
-            adapter_path = workflows / "relay-dispatch.yml"
+            adapter_path = workflows / "cindral-dispatch.yml"
             adapter_path.write_text(adapter)
-            (workflows / "relay-ci.yml").write_text(reusable)
+            (workflows / "cindral-ci.yml").write_text(reusable)
             self.assertEqual(validate_adapter(adapter_path, self.policy), ())
 
     def test_adapter_reports_missing_lane_inputs(self) -> None:
         content = (ROOT / "templates/personal-dispatch.yml").read_text()
-        content = content.replace("      relay_reason:\n", "      reason:\n", 1)
+        content = content.replace("      cindral_reason:\n", "      reason:\n", 1)
         with tempfile.NamedTemporaryFile(mode="w+") as adapter:
             adapter.write(content)
             adapter.flush()
             errors = validate_adapter(adapter.name, self.policy)
-        self.assertIn("workflow_dispatch is missing the relay_reason input", errors)
+        self.assertIn("workflow_dispatch is missing the cindral_reason input", errors)
 
-    def test_adapter_requires_relay_ref_input(self) -> None:
+    def test_adapter_requires_cindral_ref_input(self) -> None:
         content = (ROOT / "templates/personal-dispatch.yml").read_text()
-        content = content.replace("      relay_ref:\n", "      pr_ref:\n", 1)
+        content = content.replace("      cindral_ref:\n", "      pr_ref:\n", 1)
         with tempfile.NamedTemporaryFile(mode="w+") as adapter:
             adapter.write(content)
             adapter.flush()
             errors = validate_adapter(adapter.name, self.policy)
-        self.assertIn("workflow_dispatch is missing the relay_ref input", errors)
+        self.assertIn("workflow_dispatch is missing the cindral_ref input", errors)
 
     def test_lane_readiness_requires_an_online_matching_runner(self) -> None:
         runners = (
@@ -139,7 +139,7 @@ jobs:
         self.assertFalse(readiness["device:laptop"].ready)
         self.assertFalse(readiness["burst"].ready)
 
-    @patch("runner_relay.cli.GitHubClient")
+    @patch("cindral.cli.GitHubClient")
     def test_onboard_command_reports_ready_lanes(self, github_client) -> None:
         runners = [
             RepositoryRunner("fallback", "online", self.policy.lane_labels["fallback"]),
@@ -153,9 +153,9 @@ jobs:
         output = io.StringIO()
         with (
             patch.object(sys, "argv", [
-                "runner-relay",
+                "cindral",
                 "onboard",
-                "yesvus/runner-relay",
+                "yesvus/cindral",
                 "--adapter",
                 str(ROOT / "templates/personal-dispatch.yml"),
                 "--github-token-env",
@@ -169,7 +169,7 @@ jobs:
         self.assertIn("device:desktop: ready", output.getvalue())
         self.assertIn("Overall: ready", output.getvalue())
 
-    @patch("runner_relay.cli.GitHubClient")
+    @patch("cindral.cli.GitHubClient")
     def test_onboard_registers_webhook_after_remote_adapter_is_confirmed(self, github_client) -> None:
         runners = (RepositoryRunner("fallback", "online", self.policy.lane_labels["fallback"]),)
         github_client.return_value.list_runners.return_value = runners
@@ -178,38 +178,38 @@ jobs:
         output = io.StringIO()
         with (
             patch.object(sys, "argv", [
-                "runner-relay",
+                "cindral",
                 "onboard",
                 "example-org/example-app",
                 "--adapter",
                 str(ROOT / "templates/personal-dispatch.yml"),
                 "--register-webhook",
             ]),
-            patch.dict(os.environ, {"GITHUB_TOKEN": "token", "RELAY_WEBHOOK_SECRET": "secret"}),
+            patch.dict(os.environ, {"GITHUB_TOKEN": "token", "CINDRAL_WEBHOOK_SECRET": "secret"}),
             patch("sys.stdout", output),
         ):
             main()
-        github_client.return_value.workflow_exists.assert_called_once_with("example-org/example-app", "relay-dispatch.yml")
+        github_client.return_value.workflow_exists.assert_called_once_with("example-org/example-app", "cindral-dispatch.yml")
         github_client.return_value.ensure_push_webhook.assert_called_once_with(
-            "example-org/example-app", "https://cindral.example.com/relay/dispatch", "secret"
+            "example-org/example-app", "https://cindral.example.com/cindral/dispatch", "secret"
         )
         self.assertIn("Webhook: created", output.getvalue())
 
-    @patch("runner_relay.cli.GitHubClient")
+    @patch("cindral.cli.GitHubClient")
     def test_onboard_refuses_webhook_before_adapter_is_on_default_branch(self, github_client) -> None:
         runners = (RepositoryRunner("fallback", "online", self.policy.lane_labels["fallback"]),)
         github_client.return_value.list_runners.return_value = runners
         github_client.return_value.workflow_exists.return_value = False
         with (
             patch.object(sys, "argv", [
-                "runner-relay",
+                "cindral",
                 "onboard",
                 "example-org/example-app",
                 "--adapter",
                 str(ROOT / "templates/personal-dispatch.yml"),
                 "--register-webhook",
             ]),
-            patch.dict(os.environ, {"GITHUB_TOKEN": "token", "RELAY_WEBHOOK_SECRET": "secret"}),
+            patch.dict(os.environ, {"GITHUB_TOKEN": "token", "CINDRAL_WEBHOOK_SECRET": "secret"}),
             patch("sys.stdout", io.StringIO()),
             patch("sys.stderr", io.StringIO()),
             self.assertRaises(SystemExit),

@@ -7,11 +7,11 @@ import unittest
 from http.client import HTTPConnection
 from unittest.mock import MagicMock, patch
 
-from runner_relay.github import GitHubAPIError, RepositoryRunner
-from runner_relay.service import WEBHOOK_PATH, RelayHandler, RelayServer
-from runner_relay.state import load_runners
-from runner_relay.policy import Policy
-from runner_relay.webhook import parse_pull_request_event, parse_push_event, sign, verify_signature, WebhookError
+from cindral.github import GitHubAPIError, RepositoryRunner
+from cindral.service import WEBHOOK_PATH, CindralHandler, CindralServer
+from cindral.state import load_runners
+from cindral.policy import Policy
+from cindral.webhook import parse_pull_request_event, parse_push_event, sign, verify_signature, WebhookError
 
 SECRET = "shhh"
 REPO = "example-org/example-app"
@@ -118,17 +118,17 @@ class PullRequestEventTest(unittest.TestCase):
 
 
 class WebhookEndpointTest(unittest.TestCase):
-    server: RelayServer
+    server: CindralServer
     thread: threading.Thread
 
     def setUp(self) -> None:
-        self.server = RelayServer(("127.0.0.1", 0), RelayHandler)
+        self.server = CindralServer(("127.0.0.1", 0), CindralHandler)
         self.server.policy = Policy.load("config/policy.toml")
         self.server.runners = load_runners("examples/state.json")
         self.server.github = None
         self.server.webhook_secret = SECRET
         self.server.dispatch_token = "dispatch-token"
-        self.server.workflow_file = "relay-dispatch.yml"
+        self.server.workflow_file = "cindral-dispatch.yml"
         self.server.capacity_lock = threading.Lock()
         self.server.runner_reservations = {}
         self.server.reservation_seconds = 10
@@ -188,9 +188,9 @@ class WebhookEndpointTest(unittest.TestCase):
         self.assertEqual(payload["capacity"]["runner_candidate"], "desktop-example-web")
         repository, workflow, ref, inputs = github.dispatch.call_args[0]
         self.assertEqual(repository, REPO)
-        self.assertEqual(workflow, "relay-dispatch.yml")
+        self.assertEqual(workflow, "cindral-dispatch.yml")
         self.assertEqual(ref, "main")
-        self.assertEqual(inputs["relay_lane"], "fallback")
+        self.assertEqual(inputs["cindral_lane"], "fallback")
 
     def test_busy_repository_runner_prevents_local_dispatch(self) -> None:
         body = push_body()
@@ -237,7 +237,7 @@ class WebhookEndpointTest(unittest.TestCase):
         burst_payload = json.dumps(
             {
                 "repository": REPO,
-                "workflow": "relay-dispatch.yml",
+                "workflow": "cindral-dispatch.yml",
                 "ref": "main",
                 "requested_lane": "burst",
             }
@@ -271,7 +271,7 @@ class WebhookEndpointTest(unittest.TestCase):
                 payload = json.dumps(
                     {
                         "repository": REPO,
-                        "workflow": "relay-dispatch.yml",
+                        "workflow": "cindral-dispatch.yml",
                         "ref": "main",
                         "requested_lane": "device",
                         "target": target,
@@ -374,9 +374,9 @@ class WebhookEndpointTest(unittest.TestCase):
             )
         self.assertEqual(status, 200)
         self.assertEqual(payload["lane"], "hosted")
-        self.assertEqual(github.dispatch.call_args[0][3]["relay_lane"], "hosted")
+        self.assertEqual(github.dispatch.call_args[0][3]["cindral_lane"], "hosted")
 
-    def test_repository_without_the_relay_workflow_is_ignored(self) -> None:
+    def test_repository_without_the_cindral_workflow_is_ignored(self) -> None:
         body = push_body(repository="example-org/other")
         with patch.object(self.server, "github") as github:
             github.workflow_exists.return_value = False
@@ -435,10 +435,10 @@ class WebhookEndpointTest(unittest.TestCase):
         self.assertEqual(payload["lane"], "fallback")
         repository, workflow, ref, inputs = github.dispatch.call_args[0]
         self.assertEqual(repository, REPO)
-        self.assertEqual(workflow, "relay-dispatch.yml")
+        self.assertEqual(workflow, "cindral-dispatch.yml")
         self.assertEqual(ref, "main")
-        self.assertEqual(inputs["relay_lane"], "fallback")
-        self.assertEqual(inputs["relay_ref"], "refs/pull/42/merge")
+        self.assertEqual(inputs["cindral_lane"], "fallback")
+        self.assertEqual(inputs["cindral_ref"], "refs/pull/42/merge")
 
     def test_untrusted_private_pull_request_is_forced_to_hosted(self) -> None:
         body = pull_request_body(author_association="CONTRIBUTOR")
@@ -452,7 +452,7 @@ class WebhookEndpointTest(unittest.TestCase):
         self.assertFalse(payload["trusted"])
         self.assertEqual(payload["lane"], "hosted")
         self.assertEqual(payload["reason"], "untrusted pull request requires hosted execution")
-        self.assertEqual(github.dispatch.call_args[0][3]["relay_lane"], "hosted")
+        self.assertEqual(github.dispatch.call_args[0][3]["cindral_lane"], "hosted")
 
     def test_public_pull_request_uses_hosted_lane(self) -> None:
         body = pull_request_body(private=False)
@@ -464,7 +464,7 @@ class WebhookEndpointTest(unittest.TestCase):
             )
         self.assertEqual(status, 200)
         self.assertEqual(payload["lane"], "hosted")
-        self.assertEqual(github.dispatch.call_args[0][3]["relay_lane"], "hosted")
+        self.assertEqual(github.dispatch.call_args[0][3]["cindral_lane"], "hosted")
 
     def test_bad_signature_on_pull_request_is_refused(self) -> None:
         body = pull_request_body()
@@ -495,21 +495,21 @@ class WebhookEndpointTest(unittest.TestCase):
 
     def test_internal_dispatch_requires_a_bearer_token(self) -> None:
         payload = json.dumps(
-            {"repository": REPO, "workflow": "relay-dispatch.yml", "ref": "main", "private": True, "quota_status": "unknown"}
+            {"repository": REPO, "workflow": "cindral-dispatch.yml", "ref": "main", "private": True, "quota_status": "unknown"}
         ).encode()
         status, _ = self.post("/v1/dispatch", payload, {})
         self.assertEqual(status, 401)
 
     def test_internal_dispatch_with_wrong_token_is_refused(self) -> None:
         payload = json.dumps(
-            {"repository": REPO, "workflow": "relay-dispatch.yml", "ref": "main", "private": True, "quota_status": "unknown"}
+            {"repository": REPO, "workflow": "cindral-dispatch.yml", "ref": "main", "private": True, "quota_status": "unknown"}
         ).encode()
         status, _ = self.post("/v1/dispatch", payload, {"Authorization": "Bearer nope"})
         self.assertEqual(status, 401)
 
     def test_internal_dispatch_with_token_is_allowed(self) -> None:
         payload = json.dumps(
-            {"repository": REPO, "workflow": "relay-dispatch.yml", "ref": "main", "private": True, "quota_status": "unknown"}
+            {"repository": REPO, "workflow": "cindral-dispatch.yml", "ref": "main", "private": True, "quota_status": "unknown"}
         ).encode()
         with patch.object(self.server, "github"):
             status, body = self.post("/v1/dispatch", payload, {"Authorization": "Bearer dispatch-token"})
@@ -520,7 +520,7 @@ class WebhookEndpointTest(unittest.TestCase):
         payload = json.dumps(
             {
                 "repository": REPO,
-                "workflow": "relay-dispatch.yml",
+                "workflow": "cindral-dispatch.yml",
                 "ref": "main",
                 "inputs": ["invalid"],
             }
@@ -538,7 +538,7 @@ class WebhookEndpointTest(unittest.TestCase):
     def test_unset_dispatch_token_refuses_rather_than_serving(self) -> None:
         self.server.dispatch_token = None
         payload = json.dumps(
-            {"repository": REPO, "workflow": "relay-dispatch.yml", "ref": "main", "private": True, "quota_status": "unknown"}
+            {"repository": REPO, "workflow": "cindral-dispatch.yml", "ref": "main", "private": True, "quota_status": "unknown"}
         ).encode()
         status, _ = self.post("/v1/dispatch", payload, {})
         self.assertEqual(status, 401)

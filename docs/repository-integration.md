@@ -1,15 +1,15 @@
 # Repository integration guide
 
-This guide is the migration contract for adding Runner Relay to a personal-account repository.
+This guide is the migration contract for adding Cindral to a personal-account repository.
 
 ## Goal
 
-Runner Relay chooses the execution lane in the k3s broker before repository code runs. The repository owns its build, lint, test, and release commands.
+Cindral chooses the execution lane in the k3s broker before repository code runs. The repository owns its build, lint, test, and release commands.
 
 ```text
 GitHub event
-    -> k3s Runner Relay
-    -> repository workflow_dispatch with relay_lane
+    -> k3s Cindral
+    -> repository workflow_dispatch with cindral_lane
     -> fixed hosted, fallback, device, or burst job
 ```
 
@@ -22,7 +22,7 @@ Start from [`templates/personal-dispatch.yml`](../templates/personal-dispatch.ym
 - accept `workflow_dispatch` inputs,
 - define fixed `hosted`, `fallback`, `device`, and `burst` jobs,
 - require the `fallback` custom label on the repository's fallback runner,
-- select jobs with `if: inputs.relay_lane == ...`,
+- select jobs with `if: inputs.cindral_lane == ...`,
 - keep repository commands in the repository,
 - set timeouts and concurrency limits,
 - keep untrusted pull-request code off self-hosted jobs.
@@ -30,23 +30,23 @@ Start from [`templates/personal-dispatch.yml`](../templates/personal-dispatch.ym
 The broker dispatches these inputs:
 
 ```text
-relay_lane
-relay_target
-relay_reason
-relay_ref
+cindral_lane
+cindral_target
+cindral_reason
+cindral_ref
 ```
 
 The adapter should not call the broker recursively and should not accept arbitrary shell commands as dispatch inputs.
 
 ## Onboarding check
 
-Run onboarding from the Runner Relay checkout after the adapter is merged to the
+Run onboarding from the Cindral checkout after the adapter is merged to the
 repository's default branch:
 
 ```sh
 GITHUB_TOKEN="$(gh auth token)" \
-RELAY_WEBHOOK_SECRET="$(cat ~/.relay-webhook-secret)" \
-uv run runner-relay onboard OWNER/REPOSITORY \
+CINDRAL_WEBHOOK_SECRET="$(cat ~/.cindral-webhook-secret)" \
+uv run cindral onboard OWNER/REPOSITORY \
   --checkout /path/to/checkout \
   --register-webhook
 ```
@@ -59,10 +59,10 @@ creates or updates the signed `push` webhook. The token needs permission to read
 workflows and runners and manage repository webhooks. Without
 `--register-webhook`, onboarding only validates and reports readiness.
 
-The adapter path defaults to `.github/workflows/relay-dispatch.yml` under
+The adapter path defaults to `.github/workflows/cindral-dispatch.yml` under
 `--checkout`. The webhook URL defaults to
-`https://cindral.example.com/relay/dispatch`; use `--webhook-url` to override it.
-The webhook secret is read from `RELAY_WEBHOOK_SECRET` and is never printed.
+`https://cindral.example.com/cindral/dispatch`; use `--webhook-url` to override it.
+The webhook secret is read from `CINDRAL_WEBHOOK_SECRET` and is never printed.
 Runner registration itself remains managed by the deployment.
 
 ## pnpm contract
@@ -79,15 +79,15 @@ A repository that wants one reliable command for constrained runners can define:
 
 The sequential form avoids three competing package installations and compiler processes on a constrained device. Repositories with expensive independent jobs can keep separate scripts and jobs.
 
-Repositories with an established npm workflow keep npm. Runner Relay detects the package manager from repository instructions, `packageManager`, and the committed lockfile. It never changes lockfiles during integration.
+Repositories with an established npm workflow keep npm. Cindral detects the package manager from repository instructions, `packageManager`, and the committed lockfile. It never changes lockfiles during integration.
 
 ## Trust boundary
 
 Self-hosted runners must not execute untrusted pull-request code.
 
-Runner Relay treats pull requests from `OWNER`, `MEMBER`, and `COLLABORATOR` authors as trusted. All other author associations are forced to the hosted lane, regardless of quota policy. Trusted pull requests use the normal repository visibility and quota policy. The broker dispatches the adapter from the repository's default branch and passes `refs/pull/<number>/merge` as `relay_ref`, which the adapter checks out.
+Cindral treats pull requests from `OWNER`, `MEMBER`, and `COLLABORATOR` authors as trusted. All other author associations are forced to the hosted lane, regardless of quota policy. Trusted pull requests use the normal repository visibility and quota policy. The broker dispatches the adapter from the repository's default branch and passes `refs/pull/<number>/merge` as `cindral_ref`, which the adapter checks out.
 
-Configure the GitHub webhook for both `push` and `pull_request` events. Relay routes `opened`, `reopened`, `synchronize`, and `ready_for_review` actions. Other pull-request actions are acknowledged and ignored.
+Configure the GitHub webhook for both `push` and `pull_request` events. Cindral routes `opened`, `reopened`, `synchronize`, and `ready_for_review` actions. Other pull-request actions are acknowledged and ignored.
 
 The broker is a dispatcher. It does not check out repository code or run repository commands.
 
@@ -98,8 +98,8 @@ public.
 
 | Path | Who may call it | Gate |
 | --- | --- | --- |
-| `POST /relay/dispatch` | GitHub, from a webhook | `X-Hub-Signature-256` HMAC, supported event and action, and an opted-in relay workflow |
-| `POST /v1/dispatch` | operator, in-cluster | `Authorization: Bearer $RELAY_DISPATCH_TOKEN` |
+| `POST /cindral/dispatch` | GitHub, from a webhook | `X-Hub-Signature-256` HMAC, supported event and action, and an opted-in cindral workflow |
+| `POST /v1/dispatch` | operator, in-cluster | `Authorization: Bearer $CINDRAL_DISPATCH_TOKEN` |
 | `POST /v1/route` | operator, in-cluster | none, it only returns a decision and has no side effects |
 
 Every gate **fails closed**. If the relevant environment variable is unset the
@@ -107,14 +107,14 @@ endpoint refuses the request rather than serving it, so a missing Secret cannot
 silently turn a gated endpoint into an open one. `serve` prints a warning at
 startup for each one that is unset.
 
-### `/relay/dispatch` is the public entry point
+### `/cindral/dispatch` is the public entry point
 
 It accepts signed GitHub `push` and `pull_request` payloads and dispatches the
 repository's adapter on the lane the policy selects. Other events are
 acknowledged and ignored:
 
 - a missing or wrong signature is `401`, and the comparison is constant-time
-- a repository without the configured relay workflow is `202` ignored
+- a repository without the configured cindral workflow is `202` ignored
 - a branch other than the repository's default branch, a tag, or a deleted ref
   is `202` ignored, with no dispatch
 - pull requests with actions other than `opened`, `reopened`, `synchronize`,
@@ -126,7 +126,7 @@ routes to hosted runners. Quota is deliberately reported as unknown, because
 only the caller knows the remaining minutes and the policy default for unknown
 quota is the local lane.
 
-A repository opts in by installing the webhook and adding the relay adapter.
+A repository opts in by installing the webhook and adding the cindral adapter.
 The broker confirms the adapter exists through GitHub's workflow API before
 dispatching. Before a local dispatch, it reads the target repository's current
 runner registrations and busy state from GitHub. Offline, busy, unregistered,
@@ -134,13 +134,13 @@ or temporarily reserved runners are ineligible. A failed capacity lookup fails
 closed and does not dispatch a local job. Brief in-memory reservations prevent
 simultaneous webhook requests from oversubscribing an idle lane while GitHub
 assigns the dispatched workflow. The reservation window defaults to 10 seconds
-and can be changed with `RELAY_RUNNER_RESERVATION_SECONDS`. Reservations are
+and can be changed with `CINDRAL_RUNNER_RESERVATION_SECONDS`. Reservations are
 process-local, so the broker must run one replica; GitHub's busy state remains
 the source of truth across restarts.
 
 Pushes dispatch on the signed payload's default branch, and pull requests
 dispatch the adapter from that same default branch and pass the PR merge ref as
-`relay_ref`, keeping the workflow definition on trusted default-branch code
+`cindral_ref`, keeping the workflow definition on trusted default-branch code
 while testing the proposed merge. Neither repository names nor branch names
 need to be copied into the broker deployment.
 
@@ -148,13 +148,13 @@ need to be copied into the broker deployment.
 
 | Variable | Required for | Effect if unset |
 | --- | --- | --- |
-| `GITHUB_TOKEN` | any dispatch | `/v1/dispatch` and `/relay/dispatch` return `503` |
-| `RELAY_WEBHOOK_SECRET` | `/relay/dispatch` | returns `503` for every delivery |
-| `RELAY_DISPATCH_TOKEN` | `/v1/dispatch` | returns `401` for every request |
-| `RELAY_WORKFLOW_FILE` | `/relay/dispatch` | defaults to `relay-dispatch.yml` |
-| `RELAY_RUNNER_RESERVATION_SECONDS` | local dispatch capacity | defaults to `10`; must be positive |
+| `GITHUB_TOKEN` | any dispatch | `/v1/dispatch` and `/cindral/dispatch` return `503` |
+| `CINDRAL_WEBHOOK_SECRET` | `/cindral/dispatch` | returns `503` for every delivery |
+| `CINDRAL_DISPATCH_TOKEN` | `/v1/dispatch` | returns `401` for every request |
+| `CINDRAL_WORKFLOW_FILE` | `/cindral/dispatch` | defaults to `cindral-dispatch.yml` |
+| `CINDRAL_RUNNER_RESERVATION_SECONDS` | local dispatch capacity | defaults to `10`; must be positive |
 
-Narrow `GITHUB_TOKEN` to the repositories using Relay with permission to
+Narrow `GITHUB_TOKEN` to the repositories using Cindral with permission to
 dispatch workflows. The workflow opt-in prevents accidental dispatch to
 unconfigured repositories, but a narrowly scoped credential is still the
 strongest limit on the broker's impact if its webhook secret is exposed.

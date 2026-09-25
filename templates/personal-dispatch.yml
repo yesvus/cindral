@@ -1,9 +1,9 @@
-name: relay-dispatch
+name: cindral-dispatch
 
 on:
   workflow_dispatch:
     inputs:
-      relay_lane:
+      cindral_lane:
         required: true
         type: choice
         options:
@@ -11,15 +11,15 @@ on:
           - fallback
           - device
           - burst
-      relay_target:
+      cindral_target:
         required: false
         type: string
         default: ""
-      relay_reason:
+      cindral_reason:
         required: false
         type: string
         default: ""
-      relay_ref:
+      cindral_ref:
         required: false
         type: string
         default: ""
@@ -28,49 +28,49 @@ permissions:
   contents: read
 
 concurrency:
-  group: relay-${{ github.workflow }}-${{ inputs.relay_ref || github.ref }}
+  group: cindral-${{ github.workflow }}-${{ inputs.cindral_ref || github.ref }}
   cancel-in-progress: false
 
 jobs:
   hosted:
-    if: inputs.relay_lane == 'hosted'
+    if: inputs.cindral_lane == 'hosted'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.relay_ref || github.ref }}
+          ref: ${{ inputs.cindral_ref || github.ref }}
       - run: ./scripts/ci
 
   fallback:
-    if: inputs.relay_lane == 'fallback'
+    if: inputs.cindral_lane == 'fallback'
     # The custom label keeps device-only runners out of the fallback lane.
     runs-on: [self-hosted, Linux, ARM64, fallback]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.relay_ref || github.ref }}
+          ref: ${{ inputs.cindral_ref || github.ref }}
       - run: ./scripts/ci
 
   device:
-    if: inputs.relay_lane == 'device' && (inputs.relay_target == 'desktop' || inputs.relay_target == 'laptop' || inputs.relay_target == 'phone')
+    if: inputs.cindral_lane == 'device' && (inputs.cindral_target == 'desktop' || inputs.cindral_target == 'laptop' || inputs.cindral_target == 'phone')
     # Selected by runner name, which is the label GitHub registers each device
     # with, so no class label is needed.
-    runs-on: [self-hosted, Linux, ARM64, "${{ inputs.relay_target }}"]
+    runs-on: [self-hosted, Linux, ARM64, "${{ inputs.cindral_target }}"]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.relay_ref || github.ref }}
+          ref: ${{ inputs.cindral_ref || github.ref }}
       - run: ./scripts/ci
 
   burst:
-    if: inputs.relay_lane == 'burst'
+    if: inputs.cindral_lane == 'burst'
     runs-on: [self-hosted, Linux, ARM64, burst]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.relay_ref || github.ref }}
+          ref: ${{ inputs.cindral_ref || github.ref }}
       - run: ./scripts/ci

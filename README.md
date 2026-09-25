@@ -1,8 +1,8 @@
-# Runner Relay
+# Cindral
 
 Quota-aware GitHub Actions routing across GitHub-hosted and self-hosted runners.
 
-Runner Relay chooses an execution lane before repository code runs. GitHub-hosted runners are preferred while quota is available. Local runners are selected only when the request is eligible, the quota policy allows fallback, and a healthy idle runner exists.
+Cindral chooses an execution lane before repository code runs. GitHub-hosted runners are preferred while quota is available. Local runners are selected only when the request is eligible, the quota policy allows fallback, and a healthy idle runner exists.
 
 ## Policy
 
@@ -12,7 +12,7 @@ The default policy is in [`config/policy.toml`](config/policy.toml). Package-man
 - Private repositories use hosted runners while quota is explicitly available.
 - Exhausted or unknown private-repository quota selects the first healthy local fallback.
 - Explicit `device`, `burst`, and `fallback` lanes are supported.
-- Before local dispatch, Relay checks the target repository's live runner registrations and busy state, then reserves capacity while GitHub assigns the job.
+- Before local dispatch, Cindral checks the target repository's live runner registrations and busy state, then reserves capacity while GitHub assigns the job.
 - Ordinary test failures never trigger a rerun on another runner.
 
 The policy engine is deterministic and receives runner state as data. It does not execute repository code and does not store credentials.
@@ -51,9 +51,9 @@ The response contains a JSON runner label array:
 
 ## Personal-account dispatch
 
-This installation uses a personal GitHub account, not an organization. Runner Relay therefore uses a repository-local `workflow_dispatch` adapter. The k3s broker chooses the lane before dispatching the workflow.
+This installation uses a personal GitHub account, not an organization. Cindral therefore uses a repository-local `workflow_dispatch` adapter. The k3s broker chooses the lane before dispatching the workflow.
 
-Start from [`templates/personal-dispatch.yml`](templates/personal-dispatch.yml), replace `./scripts/ci` with the repository's real pnpm or npm command, and keep the fixed lane jobs. Runner Relay adds `relay_lane`, `relay_target`, `relay_reason`, and `relay_ref` to the dispatch inputs. For PR dispatches the workflow runs from the repository's default branch and checks out the PR merge ref separately.
+Start from [`templates/personal-dispatch.yml`](templates/personal-dispatch.yml), replace `./scripts/ci` with the repository's real pnpm or npm command, and keep the fixed lane jobs. Cindral adds `cindral_lane`, `cindral_target`, `cindral_reason`, and `cindral_ref` to the dispatch inputs. For PR dispatches the workflow runs from the repository's default branch and checks out the PR merge ref separately.
 
 The broker calls:
 
@@ -67,7 +67,7 @@ No organization runner group or cross-repository runner scope is required. Repos
 
 ## Repository boundaries
 
-- `runner-relay` owns policy, broker code, dispatch templates, and tests.
+- `cindral` owns policy, broker code, dispatch templates, and tests.
 - `ops` owns the host k3s deployment, resource limits, monitoring, and alerts.
 - `fleet` owns host identity, hardware metadata, and inventory tags.
 - GitHub repository-scoped runner registrations are managed by the broker.
@@ -87,7 +87,7 @@ The tool does not push commits or tags. Review the diff, commit it, tag it with 
 
 ```sh
 python -m unittest discover -s tests -v
-python -m runner_relay.cli route --policy config/policy.toml --state examples/state.json --request examples/request.json
+python -m cindral.cli route --policy config/policy.toml --state examples/state.json --request examples/request.json
 ```
 
 The current implementation is the policy and service foundation. Live GitHub quota collection, Fleet/Beszel state ingestion, repository-scoped runner registration, and automatic repository migration are activation steps that belong in the Ops deployment and rollout plan.

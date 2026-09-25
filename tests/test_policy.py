@@ -1,7 +1,7 @@
 import unittest
 
-from runner_relay.models import RouteRequest, Runner
-from runner_relay.policy import Policy, RouteUnavailable
+from cindral.models import RouteRequest, Runner
+from cindral.policy import Policy, RouteUnavailable
 
 
 class PolicyTest(unittest.TestCase):

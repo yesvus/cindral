@@ -1,5 +1,5 @@
 name: Feature request
-description: Suggest a Runner Relay capability
+description: Suggest a Cindral capability
 labels: ["enhancement"]
 body:
   - type: textarea
