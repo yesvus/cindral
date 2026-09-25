@@ -56,6 +56,21 @@ class PolicyTest(unittest.TestCase):
         self.assertEqual(decision.runner, "zombie-burst")
 
     def test_explicit_device_requires_target(self) -> None:
+        with self.assertRaisesRegex(RouteUnavailable, "requires an explicit target"):
+            self.policy.choose(RouteRequest(requested_lane="device"), self.runners)
+
+    def test_auto_route_does_not_select_device_without_a_target(self) -> None:
+        device_only = (
+            Runner("papyrus", "online", False, ("self-hosted", "Linux", "ARM64", "papyrus", "device")),
+        )
+        with self.assertRaises(RouteUnavailable):
+            self.policy.choose(RouteRequest(quota_status="unknown"), device_only)
+
+    def test_explicit_device_rejects_unknown_target(self) -> None:
+        with self.assertRaisesRegex(RouteUnavailable, "unknown device target"):
+            self.policy.choose(RouteRequest(requested_lane="device", target="unknown"), self.runners)
+
+    def test_explicit_device_with_target_selects_matching_runner(self) -> None:
         decision = self.policy.choose(
             RouteRequest(requested_lane="device", target="papyrus"),
             self.runners,
