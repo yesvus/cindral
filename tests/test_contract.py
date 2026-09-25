@@ -36,6 +36,28 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(len(contract.services), 1)
         self.assertEqual(contract.services[0].name, "postgres")
         self.assertEqual(contract.services[0].env["POSTGRES_USER"], "postgres")
+        self.assertIsNone(contract.services[0].health_cmd)
+        self.assertFalse(contract.docker)
+
+    def test_parses_runner_docker_and_service_health(self) -> None:
+        contract = Contract.parse(
+            '[image]\nref = "x"\n\n[runner]\ndocker = true\n\n'
+            '[[services]]\nname = "postgres"\nimage = "pgvector/pgvector:pg16"\n'
+            'health_cmd = "pg_isready -U postgres"\n\n[[steps]]\nrun = "test"\n'
+        )
+        self.assertTrue(contract.docker)
+        self.assertEqual(contract.services[0].health_cmd, "pg_isready -U postgres")
+
+    def test_rejects_a_non_boolean_runner_docker(self) -> None:
+        with self.assertRaises(ContractError):
+            Contract.parse('[image]\nref = "x"\n\n[runner]\ndocker = "yes"\n\n[[steps]]\nrun = "test"\n')
+
+    def test_rejects_an_empty_health_cmd(self) -> None:
+        with self.assertRaises(ContractError):
+            Contract.parse(
+                '[image]\nref = "x"\n\n[[services]]\nname = "db"\nimage = "y"\n'
+                'health_cmd = "  "\n\n[[steps]]\nrun = "test"\n'
+            )
 
     def test_dockerfile_is_an_alternative_to_ref(self) -> None:
         contract = Contract.parse(

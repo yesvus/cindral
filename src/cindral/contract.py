@@ -16,6 +16,7 @@ class Service:
     image: str
     env: dict[str, str] = field(default_factory=dict)
     command: tuple[str, ...] = ()
+    health_cmd: str | None = None
 
     def as_dict(self) -> dict:
         return {"name": self.name, "image": self.image, "env": dict(self.env)}
@@ -29,6 +30,7 @@ class Contract:
     env: dict[str, str] = field(default_factory=dict)
     services: tuple[Service, ...] = ()
     timeout_minutes: int | None = None
+    docker: bool = False
 
     @classmethod
     def parse(cls, text: str) -> "Contract":
@@ -63,6 +65,13 @@ class Contract:
 
         env = _string_map(data.get("env", {}), "[env]")
 
+        runner = data.get("runner", {})
+        if not isinstance(runner, dict):
+            raise ContractError("[runner] must be a table")
+        docker = runner.get("docker", False)
+        if not isinstance(docker, bool):
+            raise ContractError("[runner].docker must be a boolean")
+
         services: list[Service] = []
         raw_services = data.get("services", [])
         if not isinstance(raw_services, list):
@@ -80,12 +89,16 @@ class Contract:
             raw_command = entry.get("command", [])
             if not isinstance(raw_command, list) or not all(isinstance(part, str) for part in raw_command):
                 raise ContractError(f"services[{index}].command must be a list of strings")
+            health_cmd = entry.get("health_cmd")
+            if health_cmd is not None and (not isinstance(health_cmd, str) or not health_cmd.strip()):
+                raise ContractError(f"services[{index}].health_cmd must be a non-empty string")
             services.append(
                 Service(
                     name=name,
                     image=service_image.strip(),
                     env=service_env,
                     command=tuple(raw_command),
+                    health_cmd=health_cmd.strip() if isinstance(health_cmd, str) else None,
                 )
             )
 
@@ -100,6 +113,7 @@ class Contract:
             env=env,
             services=tuple(services),
             timeout_minutes=timeout,
+            docker=docker,
         )
 
 

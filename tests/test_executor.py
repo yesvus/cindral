@@ -2,6 +2,7 @@ import threading
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 from cindral.agent import JobSpec
 from cindral.contract import CONTRACT_PATH
@@ -16,6 +17,24 @@ run = "pnpm install --frozen-lockfile"
 
 [[steps]]
 run = "pnpm run ci"
+"""
+
+DOCKER_CONTRACT = """
+[image]
+ref = "node:22-bookworm"
+
+[runner]
+docker = true
+
+[[steps]]
+run = "docker build -t app:ci ."
+"""
+
+HEALTH_SERVICE = """
+[[services]]
+name = "postgres"
+image = "pgvector/pgvector:pg16"
+health_cmd = "pg_isready -U postgres"
 """
 
 
@@ -33,11 +52,12 @@ def spec(job_id="job-1", sha="a" * 40):
 class FakeRunner:
     """Records argv, materializes the checkout on `git init`, and reads run.sh."""
 
-    def __init__(self, contract=CONTRACT, codes=None, cancel_on=None):
+    def __init__(self, contract=CONTRACT, codes=None, cancel_on=None, health="healthy"):
         self.calls = []
         self.contract = contract
         self.codes = codes or {}
         self.cancel_on = cancel_on
+        self.health = health
         self.script = None
 
     def _workspace(self, argv):
@@ -70,13 +90,18 @@ class FakeRunner:
         if code != 0:
             raise RuntimeError(f"command failed: {argv}")
 
+    def capture(self, argv):
+        self.calls.append(list(argv))
+        return 0, f"{self.health}\n"
 
-def executor(runner, workspace):
+
+def executor(runner, workspace, docker="docker"):
     return DockerExecutor(
         token="tok",
         workspace_root=workspace,
         log_dir=str(Path(workspace) / "logs"),
         runner=runner,
+        docker=docker,
     )
 
 
@@ -113,6 +138,43 @@ class DockerExecutorTest(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         self.assertTrue(any("docker run -d --name cindral-job-1-postgres" in c for c in joined))
         self.assertTrue(any("docker rm -f cindral-job-1-postgres" in c for c in joined))
+
+    def test_mounts_the_docker_socket_for_docker_contracts(self) -> None:
+        runner = FakeRunner(contract=DOCKER_CONTRACT)
+        with TemporaryDirectory() as tmp:
+            socket = Path(tmp) / "docker.sock"
+            socket.touch()
+            fake = Path(tmp) / "docker"
+            fake.write_text("#!/bin/sh\n")
+            fake.chmod(0o755)
+            with mock.patch("cindral.executor.DOCKER_SOCKET", str(socket)), mock.patch(
+                "cindral.executor.DOCKER_PLUGIN_DIRS", ()
+            ):
+                result = executor(runner, tmp, docker=str(fake))(spec(), threading.Event())
+        joined = [" ".join(call) for call in runner.calls]
+        self.assertEqual(result.exit_code, 0)
+        self.assertTrue(any(f"-v {socket}:{socket}" in c for c in joined))
+        self.assertTrue(any(f"-v {fake}:{fake}:ro" in c for c in joined))
+        self.assertTrue(any("--group-add" in c for c in joined))
+
+    def test_waits_for_a_service_health_check(self) -> None:
+        contract = CONTRACT.replace("[image]", HEALTH_SERVICE + "\n[image]")
+        runner = FakeRunner(contract=contract)
+        with TemporaryDirectory() as tmp:
+            result = executor(runner, tmp)(spec(), threading.Event())
+        joined = [" ".join(call) for call in runner.calls]
+        self.assertEqual(result.exit_code, 0)
+        self.assertTrue(any("--health-cmd pg_isready -U postgres" in c for c in joined))
+        self.assertTrue(any("State.Health.Status" in c for c in joined))
+        self.assertIn("waiting for postgres to become healthy", result.log)
+
+    def test_an_unhealthy_service_fails_the_job(self) -> None:
+        contract = CONTRACT.replace("[image]", HEALTH_SERVICE + "\n[image]")
+        runner = FakeRunner(contract=contract, health="starting")
+        with TemporaryDirectory() as tmp, mock.patch("cindral.executor.SERVICE_HEALTH_TIMEOUT", 0):
+            result = executor(runner, tmp)(spec(), threading.Event())
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("did not become healthy", result.log)
 
     def test_missing_contract_fails_the_job(self) -> None:
         runner = FakeRunner(contract=None)
