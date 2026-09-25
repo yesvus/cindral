@@ -37,6 +37,24 @@ class GitHubClientTest(unittest.TestCase):
             GitHubClient("token").dispatch("yesvus/waymux", "ci.yml", "main", {})
 
     @patch("runner_relay.github.urlopen")
+    def test_workflow_lookup_uses_repository_actions_api(self, urlopen) -> None:
+        urlopen.return_value = Response()
+        self.assertTrue(GitHubClient("token").workflow_exists("yesvus/waymux", "relay-dispatch.yml"))
+        request = urlopen.call_args.args[0]
+        self.assertEqual(
+            request.full_url,
+            "https://api.github.com/repos/yesvus/waymux/actions/workflows/relay-dispatch.yml",
+        )
+        self.assertEqual(request.get_method(), "GET")
+
+    @patch("runner_relay.github.urlopen")
+    def test_missing_workflow_is_not_opted_in(self, urlopen) -> None:
+        from urllib.error import HTTPError
+
+        urlopen.side_effect = HTTPError("url", 404, "not found", {}, None)
+        self.assertFalse(GitHubClient("token").workflow_exists("yesvus/waymux", "relay-dispatch.yml"))
+
+    @patch("runner_relay.github.urlopen")
     def test_list_runners_uses_repository_actions_api(self, urlopen) -> None:
         urlopen.return_value = Response(
             b'{"runners":[{"name":"papyrus","status":"online","busy":false,'

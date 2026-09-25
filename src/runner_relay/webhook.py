@@ -24,6 +24,7 @@ class PushEvent:
     private: bool
     ref: str
     after: str
+    default_branch: str
 
     @property
     def branch(self) -> str:
@@ -56,6 +57,9 @@ def parse_push_event(body: bytes) -> PushEvent:
     repository = payload.get("repository")
     if not isinstance(repository, dict) or not isinstance(repository.get("full_name"), str):
         raise WebhookError("payload has no repository.full_name")
+    default_branch = repository.get("default_branch")
+    if not isinstance(default_branch, str) or not default_branch:
+        raise WebhookError("payload has no repository.default_branch")
     ref = payload.get("ref")
     after = payload.get("after")
     if not isinstance(ref, str) or not isinstance(after, str):
@@ -68,4 +72,5 @@ def parse_push_event(body: bytes) -> PushEvent:
         private=bool(repository.get("private")),
         ref=ref,
         after=after,
+        default_branch=default_branch,
     )

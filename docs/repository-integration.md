@@ -82,7 +82,7 @@ public.
 
 | Path | Who may call it | Gate |
 | --- | --- | --- |
-| `POST /relay/dispatch` | GitHub, from a webhook | `X-Hub-Signature-256` HMAC, plus a repository and branch allowlist |
+| `POST /relay/dispatch` | GitHub, from a webhook | `X-Hub-Signature-256` HMAC, the repository's default branch, and an opted-in relay workflow |
 | `POST /v1/dispatch` | operator, in-cluster | `Authorization: Bearer $RELAY_DISPATCH_TOKEN` |
 | `POST /v1/route` | operator, in-cluster | none, it only returns a decision and has no side effects |
 
@@ -97,9 +97,9 @@ It accepts a GitHub `push` payload and dispatches the repository's adapter on
 the lane the policy selects. Anything else is acknowledged and ignored:
 
 - a missing or wrong signature is `401`, and the comparison is constant-time
-- a repository outside `RELAY_ALLOWED_REPOSITORIES` is `403`
-- a branch outside `RELAY_ALLOWED_BRANCHES`, a tag, or a deleted ref is `202`
-  ignored, with no dispatch
+- a repository without the configured relay workflow is `202` ignored
+- a branch other than the repository's default branch, a tag, or a deleted ref
+  is `202` ignored, with no dispatch
 - a non-`push` event is `202` ignored
 
 Repository visibility is read from the payload, so a public repository still
@@ -107,9 +107,11 @@ routes to hosted runners. Quota is deliberately reported as unknown, because
 only the caller knows the remaining minutes and the policy default for unknown
 quota is the local lane.
 
-A signature proves the delivery came from GitHub. It does not prove the sender
-was allowed to ask for that repository, which is what the allowlist is for. Both
-are required.
+A repository opts in by installing the webhook and adding the relay adapter.
+The broker confirms the adapter exists through GitHub's workflow API before
+dispatching. It dispatches only the repository's default branch, read from the
+signed GitHub push payload. Neither repository names nor branch names need to be
+copied into the broker deployment.
 
 ### Required environment
 
@@ -118,15 +120,12 @@ are required.
 | `GITHUB_TOKEN` | any dispatch | `/v1/dispatch` and `/relay/dispatch` return `503` |
 | `RELAY_WEBHOOK_SECRET` | `/relay/dispatch` | returns `503` for every delivery |
 | `RELAY_DISPATCH_TOKEN` | `/v1/dispatch` | returns `401` for every request |
-| `RELAY_ALLOWED_REPOSITORIES` | `/relay/dispatch` | returns `403` for every repository |
-| `RELAY_ALLOWED_BRANCHES` | `/relay/dispatch` | defaults to `main` |
 | `RELAY_WORKFLOW_FILE` | `/relay/dispatch` | defaults to `relay-dispatch.yml` |
 
-`RELAY_ALLOWED_REPOSITORIES` and `RELAY_ALLOWED_BRANCHES` are comma-separated.
-
-Narrow `GITHUB_TOKEN` to the repositories in the allowlist with the `workflow`
-scope. A token that can reach every repository turns a routing bug into a
-cross-repository dispatch primitive.
+Narrow `GITHUB_TOKEN` to the repositories using Relay with permission to
+dispatch workflows. The workflow opt-in prevents accidental dispatch to
+unconfigured repositories, but a narrowly scoped credential is still the
+strongest limit on the broker's impact if its webhook secret is exposed.
 
 ## Quota behavior
 
