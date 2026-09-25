@@ -1,13 +1,18 @@
 """HTTP service for routing decisions."""
+from collections.abc import Iterable
+from dataclasses import replace
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hmac
 import json
 import os
 from pathlib import Path
+import threading
+import time
 from typing import Any
 
-from .github import GitHubAPIError, GitHubClient, GitHubDispatchError, is_repository_slug
-from .models import RouteRequest
+from .github import GitHubAPIError, GitHubClient, GitHubDispatchError, RepositoryRunner, is_repository_slug
+from .models import RouteDecision, RouteRequest, Runner
 from .policy import Policy, RouteUnavailable
 from .state import load_runners
 from .webhook import (
@@ -30,6 +35,9 @@ class RelayServer(ThreadingHTTPServer):
     webhook_secret: str | None
     dispatch_token: str | None
     workflow_file: str
+    capacity_lock: threading.Lock
+    runner_reservations: dict[str, dict[int, tuple[float, tuple[str, ...]]]]
+    reservation_seconds: int
 
 
 class RelayHandler(BaseHTTPRequestHandler):
@@ -59,19 +67,24 @@ class RelayHandler(BaseHTTPRequestHandler):
         try:
             payload: dict[str, Any] = json.loads(body)
             request = RouteRequest.from_dict(payload)
-            decision = self.server.policy.choose(request, self.server.runners)
         except (ValueError, KeyError, json.JSONDecodeError) as exc:
             self._send(400, {"error": str(exc)})
             return
-        except RouteUnavailable as exc:
-            self._send(409, {"error": str(exc)})
+        inputs = payload.get("inputs", {})
+        if not isinstance(inputs, dict) or any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in inputs.items()
+        ):
+            self._send(400, {"error": "inputs must be a string-to-string object"})
             return
         if self.path == "/v1/route":
+            try:
+                decision = self.server.policy.choose(request, self.server.runners)
+            except RouteUnavailable as exc:
+                self._send(409, {"error": str(exc)})
+                return
             self._send(200, decision.as_dict())
             return
-        self._dispatch(payload, request, decision)
-
-    def _dispatch(self, payload: dict[str, Any], request: RouteRequest, decision: Any) -> None:
         if self.server.github is None:
             self._send(503, {"error": "GitHub dispatch token is not configured"})
             return
@@ -82,7 +95,30 @@ class RelayHandler(BaseHTTPRequestHandler):
         except KeyError as exc:
             self._send(400, {"error": f"missing dispatch field: {exc.args[0]}"})
             return
-        inputs = dict(payload.get("inputs", {}))
+        if not is_repository_slug(repository):
+            self._send(400, {"error": "invalid repository name"})
+            return
+        try:
+            decision, reservation = self._dispatch_decision(request, repository)
+        except GitHubAPIError as exc:
+            self._send(502, {"error": str(exc)})
+            return
+        except RouteUnavailable as exc:
+            self._send(409, {"error": str(exc)})
+            return
+        self._dispatch(repository, workflow, ref, inputs, request, decision, reservation)
+
+    def _dispatch(
+        self,
+        repository: str,
+        workflow: str,
+        ref: str,
+        inputs: dict[str, str],
+        request: RouteRequest,
+        decision: RouteDecision,
+        reservation: tuple[str, int] | None,
+    ) -> None:
+        inputs = dict(inputs)
         inputs.update(
             {
                 "relay_lane": decision.lane,
@@ -90,12 +126,141 @@ class RelayHandler(BaseHTTPRequestHandler):
                 "relay_reason": decision.reason,
             }
         )
-        try:
-            self.server.github.dispatch(repository, workflow, ref, inputs)
-        except GitHubDispatchError as exc:
-            self._send(502, {"error": str(exc)})
+        if not self._dispatch_to_github(repository, workflow, ref, inputs, reservation):
             return
         self._send(200, {**decision.as_dict(), "dispatched": True})
+
+    def _dispatch_to_github(
+        self,
+        repository: str,
+        workflow: str,
+        ref: str,
+        inputs: dict[str, str],
+        reservation: tuple[str, int] | None,
+    ) -> bool:
+        dispatched = False
+        try:
+            self.server.github.dispatch(repository, workflow, ref, inputs)
+            dispatched = True
+        except GitHubDispatchError as exc:
+            self._send(502, {"error": str(exc)})
+            return False
+        except Exception as exc:
+            self.log_error("unexpected GitHub dispatch failure: %s", exc)
+            self._send(502, {"error": "GitHub dispatch failed"})
+            return False
+        finally:
+            if not dispatched:
+                self._release_reservation(reservation)
+        return True
+
+    def _dispatch_decision(
+        self,
+        request: RouteRequest,
+        repository: str,
+    ) -> tuple[RouteDecision, tuple[str, int] | None]:
+        hosted_decision: RouteDecision | None = None
+        try:
+            hosted_decision = self.server.policy.choose(request, ())
+        except RouteUnavailable:
+            pass
+        if hosted_decision is not None:
+            return hosted_decision, None
+        if self.server.github is None:
+            raise GitHubAPIError("GitHub runner lookup is not configured")
+
+        repository_runners = self.server.github.list_runners(repository)
+        now = time.monotonic()
+        with self.server.capacity_lock:
+            self._expire_reservations(repository, now)
+
+            local_runners = tuple(
+                Runner(
+                    name=runner.name,
+                    status=runner.status,
+                    busy=runner.busy,
+                    labels=runner.labels,
+                    healthy=runner.status == "online",
+                )
+                for runner in repository_runners
+            )
+            decision = self.server.policy.choose(request, local_runners)
+            online_idle = sum(runner.status == "online" and not runner.busy for runner in repository_runners)
+            label_key = tuple(sorted(decision.runs_on))
+            required_labels = set(label_key)
+            lane_idle = sum(
+                runner.status == "online"
+                and not runner.busy
+                and required_labels.issubset(set(runner.labels))
+                for runner in repository_runners
+            )
+            reservations = self.server.runner_reservations.get(repository, {})
+            reserved = self._overlapping_reservations(
+                repository_runners,
+                required_labels,
+                reservations.values(),
+            )
+            available = lane_idle - reserved
+            if decision.lane != "hosted" and available <= 0:
+                raise RouteUnavailable("all eligible repository runners are busy or reserved")
+            snapshot = {
+                "source": "github_repository_runners",
+                "observed_at": datetime.now(timezone.utc).isoformat(),
+                "registered": len(repository_runners),
+                "online_idle": online_idle,
+                "lane_idle": lane_idle,
+                "reserved": reserved,
+                "available": max(available, 0),
+                "runner_candidate": decision.runner,
+            }
+            decision = replace(decision, capacity=snapshot)
+            reservation = None
+            if decision.lane != "hosted" and decision.runner:
+                reservation_id = time.monotonic_ns()
+                reservation = (repository, reservation_id)
+                self.server.runner_reservations.setdefault(repository, {})[reservation_id] = (
+                    now + self.server.reservation_seconds,
+                    label_key,
+                )
+            return decision, reservation
+
+    def _expire_reservations(self, repository: str, now: float) -> None:
+        reservations = self.server.runner_reservations.get(repository, {})
+        active = {
+            reservation_id: reservation
+            for reservation_id, reservation in reservations.items()
+            if reservation[0] > now
+        }
+        if active:
+            self.server.runner_reservations[repository] = active
+        else:
+            self.server.runner_reservations.pop(repository, None)
+
+    def _overlapping_reservations(
+        self,
+        repository_runners: tuple[RepositoryRunner, ...],
+        required_labels: set[str],
+        reservations: Iterable[tuple[float, tuple[str, ...]]],
+    ) -> int:
+        idle_labels = [
+            set(runner.labels)
+            for runner in repository_runners
+            if runner.status == "online" and not runner.busy
+        ]
+        return sum(
+            any(set(reservation_labels).union(required_labels).issubset(labels) for labels in idle_labels)
+            for _, reservation_labels in reservations
+        )
+
+    def _release_reservation(self, reservation: tuple[str, int] | None) -> None:
+        if reservation is None:
+            return
+        with self.server.capacity_lock:
+            repository, reservation_id = reservation
+            reservations = self.server.runner_reservations.get(repository, {})
+            reservations.pop(reservation_id, None)
+            if not reservations:
+                self.server.runner_reservations.pop(repository, None)
 
     def _dispatch_authorized(self) -> bool:
         expected = self.server.dispatch_token
@@ -156,7 +321,10 @@ class RelayHandler(BaseHTTPRequestHandler):
             quota_status="unknown",
         )
         try:
-            decision = self.server.policy.choose(request, self.server.runners)
+            decision, reservation = self._dispatch_decision(request, event.repository)
+        except GitHubAPIError as exc:
+            self._send(502, {"error": str(exc)})
+            return
         except RouteUnavailable as exc:
             self._send(409, {"error": str(exc)})
             return
@@ -165,10 +333,13 @@ class RelayHandler(BaseHTTPRequestHandler):
             "relay_target": request.target or "",
             "relay_reason": decision.reason,
         }
-        try:
-            self.server.github.dispatch(event.repository, self.server.workflow_file, branch, inputs)
-        except GitHubDispatchError as exc:
-            self._send(502, {"error": str(exc)})
+        if not self._dispatch_to_github(
+            event.repository,
+            self.server.workflow_file,
+            branch,
+            inputs,
+            reservation,
+        ):
             return
         self._send(
             200,
@@ -201,6 +372,11 @@ def serve(policy_path: str | Path, state_path: str | Path, host: str, port: int,
     server.webhook_secret = os.environ.get("RELAY_WEBHOOK_SECRET") or None
     server.dispatch_token = os.environ.get("RELAY_DISPATCH_TOKEN") or None
     server.workflow_file = os.environ.get("RELAY_WORKFLOW_FILE") or "relay-dispatch.yml"
+    server.capacity_lock = threading.Lock()
+    server.runner_reservations = {}
+    server.reservation_seconds = int(os.environ.get("RELAY_RUNNER_RESERVATION_SECONDS", "10"))
+    if server.reservation_seconds < 1:
+        raise ValueError("RELAY_RUNNER_RESERVATION_SECONDS must be positive")
     if not server.webhook_secret:
         # refuse loudly at startup rather than serving a path that 503s later
         print("warning: RELAY_WEBHOOK_SECRET is unset, /relay/dispatch will refuse every delivery")

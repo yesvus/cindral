@@ -124,9 +124,19 @@ quota is the local lane.
 
 A repository opts in by installing the webhook and adding the relay adapter.
 The broker confirms the adapter exists through GitHub's workflow API before
-dispatching. It dispatches only the repository's default branch, read from the
-signed GitHub push payload. Neither repository names nor branch names need to be
-copied into the broker deployment.
+dispatching. Before a local dispatch, it reads the target repository's current
+runner registrations and busy state from GitHub. Offline, busy, unregistered,
+or temporarily reserved runners are ineligible. A failed capacity lookup fails
+closed and does not dispatch a local job. Brief in-memory reservations prevent
+simultaneous webhook requests from oversubscribing an idle lane while GitHub
+assigns the dispatched workflow. The reservation window defaults to 10 seconds
+and can be changed with `RELAY_RUNNER_RESERVATION_SECONDS`. Reservations are
+process-local, so the broker must run one replica; GitHub's busy state remains
+the source of truth across restarts.
+
+The broker dispatches only the repository's default branch, read from the
+signed GitHub push payload. Neither repository names nor branch names need to
+be copied into the broker deployment.
 
 ### Required environment
 
@@ -136,6 +146,7 @@ copied into the broker deployment.
 | `RELAY_WEBHOOK_SECRET` | `/relay/dispatch` | returns `503` for every delivery |
 | `RELAY_DISPATCH_TOKEN` | `/v1/dispatch` | returns `401` for every request |
 | `RELAY_WORKFLOW_FILE` | `/relay/dispatch` | defaults to `relay-dispatch.yml` |
+| `RELAY_RUNNER_RESERVATION_SECONDS` | local dispatch capacity | defaults to `10`; must be positive |
 
 Narrow `GITHUB_TOKEN` to the repositories using Relay with permission to
 dispatch workflows. The workflow opt-in prevents accidental dispatch to
@@ -144,7 +155,7 @@ strongest limit on the broker's impact if its webhook secret is exposed.
 
 ## Quota behavior
 
-The broker prefers hosted execution for public repositories and whenever private-repository quota is explicitly available. If quota is exhausted or unknown and paid overage is disabled, it selects an eligible local fallback before dispatching the workflow.
+The broker prefers hosted execution for public repositories and whenever private-repository quota is explicitly available. If quota is exhausted or unknown and paid overage is disabled, it selects an eligible local fallback from the target repository's live runner capacity before dispatching the workflow. GitHub assigns the workflow to a runner matching the adapter's lane labels.
 
 A failed test is not a capacity signal. The broker must not dispatch a second runner after an ordinary test failure.
 
