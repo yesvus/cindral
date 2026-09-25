@@ -31,33 +31,39 @@ def spec(job_id="job-1", sha="a" * 40):
 
 
 class FakeRunner:
-    """Records argv and materializes the checkout on `git init`."""
+    """Records argv, materializes the checkout on `git init`, and reads run.sh."""
 
     def __init__(self, contract=CONTRACT, codes=None, cancel_on=None):
         self.calls = []
         self.contract = contract
         self.codes = codes or {}
         self.cancel_on = cancel_on
-        self.cancel = None
+        self.script = None
 
-    def _record(self, argv):
-        self.calls.append(list(argv))
-        for marker, code in self.codes.items():
-            if marker in " ".join(argv):
-                return code
-        return 0
+    def _workspace(self, argv):
+        if "-v" in argv:
+            mount = argv[argv.index("-v") + 1]
+            return Path(mount.rsplit(":", 1)[0])
+        return None
 
     def run(self, argv, log, env=None, cwd=None, cancel=None):
-        code = self._record(argv)
+        self.calls.append(list(argv))
+        joined = " ".join(argv)
+        workspace = self._workspace(argv)
+        if workspace is not None and (workspace / "run.sh").exists():
+            self.script = (workspace / "run.sh").read_text()
+            joined += " " + self.script
         if "git init" in " ".join(argv) and self.contract is not None:
             repo = Path(argv[-1])
             (repo / ".cindral").mkdir(parents=True, exist_ok=True)
             (repo / CONTRACT_PATH).write_text(self.contract)
-        if self.cancel_on and self.cancel_on in " ".join(argv) and cancel is not None:
+        if self.cancel_on and self.cancel_on in joined and cancel is not None:
             cancel.set()
-        if code != 0:
-            log.write(f"fake: {argv} -> {code}\n")
-        return code
+        for marker, code in self.codes.items():
+            if marker in joined:
+                log.write(f"fake: {marker} -> {code}\n")
+                return code
+        return 0
 
     def check(self, argv, log, env=None, cwd=None, cancel=None):
         code = self.run(argv, log, env=env, cwd=cwd, cancel=cancel)
@@ -75,24 +81,25 @@ def executor(runner, workspace):
 
 
 class DockerExecutorTest(unittest.TestCase):
-    def test_runs_the_contract_steps(self) -> None:
+    def test_runs_the_contract_in_one_container(self) -> None:
         runner = FakeRunner()
         with TemporaryDirectory() as tmp:
             result = executor(runner, tmp)(spec(), threading.Event())
         self.assertEqual(result.exit_code, 0)
-        self.assertIn("step 1: pnpm install --frozen-lockfile", result.log)
-        self.assertIn("step 2: pnpm run ci", result.log)
+        self.assertIn("set -e", runner.script)
+        self.assertIn("'pnpm install --frozen-lockfile'", runner.script)
+        self.assertIn("'pnpm run ci'", runner.script)
         joined = [" ".join(call) for call in runner.calls]
         self.assertTrue(any("docker network create cindral-job-1" in c for c in joined))
         self.assertTrue(any("docker network rm cindral-job-1" in c for c in joined))
+        self.assertTrue(any("run.sh" in c for c in joined))
         self.assertTrue(any("checkout --detach" in c for c in joined))
 
-    def test_a_failing_step_returns_its_code_and_stops(self) -> None:
+    def test_a_failing_script_returns_its_code(self) -> None:
         runner = FakeRunner(codes={"pnpm install": 3})
         with TemporaryDirectory() as tmp:
             result = executor(runner, tmp)(spec(), threading.Event())
         self.assertEqual(result.exit_code, 3)
-        self.assertNotIn("step 2: pnpm run ci", result.log)
 
     def test_starts_and_stops_declared_services(self) -> None:
         contract = CONTRACT.replace(
@@ -114,7 +121,7 @@ class DockerExecutorTest(unittest.TestCase):
         self.assertEqual(result.exit_code, 1)
         self.assertIn("no .cindral/ci.toml", result.log)
 
-    def test_cancel_after_a_step_returns_130(self) -> None:
+    def test_cancel_returns_130(self) -> None:
         runner = FakeRunner(cancel_on="pnpm install")
         with TemporaryDirectory() as tmp:
             result = executor(runner, tmp)(spec(), threading.Event())

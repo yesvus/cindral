@@ -6,6 +6,7 @@ and returns the exit code plus captured output.
 """
 import base64
 import os
+import shlex
 import shutil
 import subprocess
 import threading
@@ -152,7 +153,7 @@ class DockerExecutor:
             except ContractError as exc:
                 raise ExecutorError(str(exc)) from exc
             image = self._image(job, repo, contract, log, cancel)
-            return self._run_steps(job, contract, image, repo, log, cancel)
+            return self._run_steps(job, contract, image, workspace, log, cancel)
         except ExecutorError as exc:
             log.write(f"cindral: {exc}\n")
             return 1
@@ -199,11 +200,14 @@ class DockerExecutor:
         job: JobSpec,
         contract: Contract,
         image: str,
-        repo: Path,
+        workspace: Path,
         log: TextIO,
         cancel: threading.Event,
     ) -> int:
         network = f"cindral-{job.id}"
+        # one container per job, so installs persist across steps the way they
+        # do in a single CI job; the checkout is mounted from the workspace
+        (workspace / "run.sh").write_text(self._script(contract.steps))
         services: list[str] = []
         self.runner.check([self.docker, "network", "create", network], log, cancel=cancel)
         try:
@@ -215,38 +219,39 @@ class DockerExecutor:
                 argv += [service.image, *service.command]
                 self.runner.check(argv, log, cancel=cancel)
                 services.append(name)
-            for index, step in enumerate(contract.steps, start=1):
-                log.write(f"\ncindral: step {index}: {step}\n")
-                argv = [
-                    self.docker,
-                    "run",
-                    "--rm",
-                    "--name",
-                    f"{network}-step-{index}",
-                    "--network",
-                    network,
-                    "-v",
-                    f"{repo}:/workspace",
-                    "-w",
-                    "/workspace",
-                    "-e",
-                    f"CINDRAL_JOB_ID={job.id}",
-                    "-e",
-                    "CI=true",
-                ]
-                for key, value in contract.env.items():
-                    argv += ["-e", f"{key}={value}"]
-                argv += [image, self.shell, "-lc", step]
-                code = self.runner.run(argv, log, cancel=cancel)
-                if code != 0:
-                    return code
-                if cancel.is_set():
-                    return 130
-            return 0
+            argv = [
+                self.docker,
+                "run",
+                "--rm",
+                "--name",
+                f"{network}-job",
+                "--network",
+                network,
+                "-v",
+                f"{workspace}:/workspace",
+                "-w",
+                "/workspace/repo",
+                "-e",
+                f"CINDRAL_JOB_ID={job.id}",
+                "-e",
+                "CI=true",
+            ]
+            for key, value in contract.env.items():
+                argv += ["-e", f"{key}={value}"]
+            argv += [image, self.shell, "-lc", "sh /workspace/run.sh"]
+            code = self.runner.run(argv, log, cancel=cancel)
+            return 130 if cancel.is_set() else code
         finally:
             for name in services:
                 self.runner.run([self.docker, "rm", "-f", name], log)
             self.runner.run([self.docker, "network", "rm", network], log)
+
+    def _script(self, steps: tuple[str, ...]) -> str:
+        lines = ["set -e"]
+        for index, step in enumerate(steps, start=1):
+            lines.append(f"printf '\\ncindral: step {index}: %s\\n' {shlex.quote(step)}")
+            lines.append(step)
+        return "\n".join(lines) + "\n"
 
     def _git_env(self) -> dict[str, str] | None:
         if not self.token:
