@@ -71,6 +71,17 @@ No organization runner group or cross-repository runner scope is required. Repos
 - `fleet` owns host identity, hardware metadata, and inventory tags.
 - GitHub repository-scoped runner registrations are managed by the broker.
 
+## Versioning
+
+`VERSION` is the release source of truth and must match `pyproject.toml`. Prepare a semver bump locally:
+
+```sh
+python scripts/release.py patch
+python scripts/release.py patch --write
+```
+
+The tool does not push commits or tags. Review the diff, commit it, tag it with the matching `vX.Y.Z` value, and publish the release after the k3s image digest has been updated and verified.
+
 ## Development
 
 ```sh
