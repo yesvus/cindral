@@ -2,13 +2,17 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
 
 const PASSWORD = process.env.CINDRAL_PANEL_PASSWORD || "";
-const EMAIL = process.env.CINDRAL_PANEL_EMAIL || "operator@yesvus.com";
+// no fallback: a default address the login form cannot show would reject
+// every operator who typed their real one
+const EMAIL = process.env.CINDRAL_PANEL_EMAIL || "";
 const SESSION_SECRET = process.env.CINDRAL_SESSION_SECRET || "";
 const SESSION_COOKIE = "cindral_session";
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
 
+export const panelEmail = EMAIL;
+
 function configured(): boolean {
-  return Boolean(PASSWORD && SESSION_SECRET);
+  return Boolean(PASSWORD && SESSION_SECRET && EMAIL);
 }
 
 export function safeEqual(presented: string, expected: string): boolean {

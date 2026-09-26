@@ -11,9 +11,9 @@ METRICS_PATH = "/metrics"
 class ObservabilityMixin:
     """Handlers for the read-only pool and metrics surfaces.
 
-    ``/v1/pool`` takes the read-only pool token, or the agent token for an
-    operator running the broker locally. The dispatch token is refused: it is a
-    different capability and must not widen into queue visibility.
+    ``/v1/pool`` takes the read-only pool token. The dispatch and agent tokens
+    are refused: they are different capabilities and must not widen into queue
+    visibility.
     ``/metrics`` is unauthenticated for Prometheus but stays same-origin, so a
     page a scraper visits cannot read pool state through the browser.
     """
