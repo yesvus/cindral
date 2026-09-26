@@ -2,93 +2,13 @@ import {
   AdminBanner,
   AdminPageHeader,
   AdminStatCard,
-  AdminStatusPill,
-  AdminTable,
-  type AdminTableColumn,
   AdminSectionCard,
 } from "@yesvus/helmdeck";
 import { Activity, CheckCircle2, Clock, Cpu, RotateCcw } from "lucide-react";
-import { jobStatusTone, type DeviceInfo, type JobInfo } from "@/lib/cindral";
 import { loadPool } from "@/lib/load-pool";
+import { DeviceTable, JobTable } from "./tables";
 
 export const dynamic = "force-dynamic";
-
-const deviceColumns: AdminTableColumn<DeviceInfo>[] = [
-  {
-    key: "name",
-    header: "Device Name",
-    cell: (d) => (
-      <span className="font-semibold text-zinc-900 dark:text-zinc-100">
-        {d.name}
-      </span>
-    ),
-  },
-  {
-    key: "status",
-    header: "Health & State",
-    cell: (d) => (
-      <AdminStatusPill
-        tone={d.status === "online" && d.healthy ? "success" : "error"}
-        label={`${d.status}${d.healthy ? "" : " (unhealthy)"}`}
-      />
-    ),
-  },
-  {
-    key: "allocation",
-    header: "Allocation",
-    cell: (d) =>
-      d.current_lease ? (
-        <AdminStatusPill tone="warning" label={`Leased: ${d.current_lease.repository}`} />
-      ) : (
-        <AdminStatusPill tone="neutral" label="Idle" />
-      ),
-  },
-  {
-    key: "labels",
-    header: "Labels",
-    cell: (d) => (
-      <span className="text-xs text-zinc-500 dark:text-zinc-400">
-        {d.labels.length > 0 ? d.labels.join(", ") : "None"}
-      </span>
-    ),
-  },
-];
-
-const jobColumns: AdminTableColumn<JobInfo>[] = [
-  {
-    key: "id",
-    header: "Job ID",
-    cell: (j) => (
-      <span className="font-mono text-xs text-zinc-600 dark:text-zinc-400">
-        {j.id.slice(0, 8)}
-      </span>
-    ),
-  },
-  {
-    key: "repository",
-    header: "Repository & Ref",
-    cell: (j) => (
-      <div>
-        <div className="font-medium text-zinc-900 dark:text-zinc-100">
-          {j.repository}
-        </div>
-        <div className="font-mono text-xs text-zinc-500">
-          {j.ref} @ {j.sha.slice(0, 7)}
-        </div>
-      </div>
-    ),
-  },
-  {
-    key: "status",
-    header: "Status",
-    cell: (j) => <AdminStatusPill tone={jobStatusTone(j.status)} label={j.status} />,
-  },
-  {
-    key: "device",
-    header: "Runner Device",
-    cell: (j) => <span className="text-sm">{j.device || "Unassigned"}</span>,
-  },
-];
 
 export default async function OverviewPage() {
   const result = await loadPool();
@@ -101,7 +21,7 @@ export default async function OverviewPage() {
           tone={result.reason === "unauthorized" ? "error" : "warning"}
           title={
             result.reason === "unauthorized"
-              ? "Operator token required"
+              ? "Sign in required"
               : "Broker unavailable"
           }
           body={result.message}
@@ -113,6 +33,7 @@ export default async function OverviewPage() {
   const { snapshot } = result;
   const pending = snapshot.queue_depth.pending;
   const oldest = snapshot.oldest_pending_age_seconds;
+  const busy = snapshot.devices.filter((d) => d.busy).length;
 
   return (
     <div className="space-y-6">
@@ -138,7 +59,7 @@ export default async function OverviewPage() {
           icon={Cpu}
           label="Active Leases"
           value={String(snapshot.queue_depth.running)}
-          detail={`${snapshot.devices.filter((d) => d.busy).length} active devices`}
+          detail={`${busy} active devices`}
           tone={snapshot.queue_depth.running > 0 ? "success" : "neutral"}
         />
         <AdminStatCard
@@ -162,16 +83,7 @@ export default async function OverviewPage() {
           title="Device Status"
           description="Available runner hardware and active lease slots"
         >
-          <AdminTable
-            columns={deviceColumns}
-            rows={snapshot.devices}
-            getKey={(d) => d.name}
-            empty={
-              <div className="p-4 text-center text-sm text-zinc-500">
-                No devices configured
-              </div>
-            }
-          />
+          <DeviceTable devices={snapshot.devices} />
         </AdminSectionCard>
 
         <AdminSectionCard
@@ -179,16 +91,7 @@ export default async function OverviewPage() {
           title="Recent Dispatches"
           description="Latest jobs submitted to the direct runner pool"
         >
-          <AdminTable
-            columns={jobColumns}
-            rows={snapshot.recent_jobs.slice(0, 5)}
-            getKey={(j) => j.id}
-            empty={
-              <div className="p-4 text-center text-sm text-zinc-500">
-                No jobs recorded yet
-              </div>
-            }
-          />
+          <JobTable jobs={snapshot.recent_jobs.slice(0, 5)} />
         </AdminSectionCard>
       </div>
     </div>
