@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TextIO
 
 from .agent import JobSpec
+from .actions import resolve_workflow_contract
 from .cache_adapters import run_cached_job
 from .cache_client import CindralCacheClient
 from .contract import CONTRACT_PATH, Contract, ContractError, Service
@@ -220,12 +221,7 @@ class DockerExecutor:
         try:
             log.write(f"cindral: job {job.id} {job.repository}@{job.sha[:12]}\n")
             self._checkout(job, repo, log, cancel)
-            try:
-                contract = Contract.parse((repo / CONTRACT_PATH).read_text())
-            except FileNotFoundError as exc:
-                raise ExecutorError(f"repository has no {CONTRACT_PATH}") from exc
-            except ContractError as exc:
-                raise ExecutorError(str(exc)) from exc
+            contract = self._load_contract(repo, job)
             image = self._image(job, repo, contract, log, cancel)
             self._cleanup_image = image
             return run_cached_job(
@@ -243,6 +239,15 @@ class DockerExecutor:
         except Exception as exc:  # noqa: BLE001 - report any device failure as a job failure
             log.write(f"cindral: unexpected executor failure: {exc!r}\n")
             return 1
+
+    def _load_contract(self, repo: Path, job: JobSpec) -> Contract:
+        contract_file = repo / CONTRACT_PATH
+        try:
+            if contract_file.is_file():
+                return Contract.parse(contract_file.read_text())
+            return resolve_workflow_contract(repo, job)
+        except ContractError as exc:
+            raise ExecutorError(str(exc)) from exc
 
     def _checkout(self, job: JobSpec, repo: Path, log: TextIO, cancel: threading.Event) -> None:
         url = f"{self.github_base}/{job.repository}.git"
