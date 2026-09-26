@@ -14,3 +14,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cindral"]
+
+[tool.cindral.code_quality]
+max_lines_src = 400
+max_lines_test = 650
+baseline_overrides = { "src/cindral/service.py" = 675, "src/cindral/executor.py" = 415 }
+
+[tool.pylint.design]
+max-line-per-file = 400
+
