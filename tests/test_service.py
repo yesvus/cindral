@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -456,15 +457,23 @@ class JobEndpointTest(unittest.TestCase):
                 client.download(uploaded["entry"]["digest"], other_scope, "another/repo", "main", "arm64", "key")
             self.assertFalse(other_scope.exists())
 
-    def test_download_failure_preserves_preexisting_destination(self) -> None:
+    def test_download_digest_mismatch_preserves_preexisting_destination(self) -> None:
         client = CindralCacheClient(f"http://127.0.0.1:{self.port}", AGENT_TOKEN)
         with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "cache.tar.gz"
+            archive.write_bytes(b"cache contents")
+            uploaded = client.upload(REPO, "main", "arm64", "key", archive)
+            digest = uploaded["entry"]["digest"]
+            self.server.cache.blob_path(digest).write_bytes(b"corrupted contents")
+
             destination = Path(tmp) / "preexisting.tar.gz"
             destination.write_bytes(b"original data")
-            with self.assertRaises(CacheClientError):
-                client.download("0" * 64, destination, REPO, "main", "arm64", "nonexistent")
+            with self.assertRaises(CacheClientError) as cm:
+                client.download(digest, destination, REPO, "main", "arm64", "key")
+            self.assertIn("content digest check", str(cm.exception))
             self.assertTrue(destination.exists())
             self.assertEqual(destination.read_bytes(), b"original data")
+            self.assertFalse((destination.parent / f".tmp-{destination.name}-{os.getpid()}").exists())
 
     def test_pool_preflight_allows_the_bearer_header(self) -> None:
         connection = HTTPConnection("127.0.0.1", self.port, timeout=10)

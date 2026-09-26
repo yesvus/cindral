@@ -220,7 +220,8 @@ class CacheAdapterTest(unittest.TestCase):
         self.assertIn("0:0", cmd)
         self.assertIn("--entrypoint", cmd)
         self.assertIn("sh", cmd)
-        self.assertIn(f"chown -R {uid}:{gid} /cindral-cache 2>/dev/null || chmod -R a+rX /cindral-cache", cmd)
+        self.assertIn(f"if ! chown -R {uid}:{gid} /cindral-cache", cmd[-1])
+        self.assertIn("chmod -R a+rX /cindral-cache", cmd[-1])
 
 
 if __name__ == "__main__":

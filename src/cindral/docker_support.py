@@ -63,7 +63,11 @@ def make_cache_readable(
                 shell,
                 image,
                 "-lc",
-                f"chown -R {uid}:{gid} /cindral-cache 2>/dev/null || chmod -R a+rX /cindral-cache",
+                (
+                    f"if ! chown -R {uid}:{gid} /cindral-cache; then "
+                    "echo 'cindral: warning: chown failed, falling back to chmod' >&2; "
+                    "chmod -R a+rX /cindral-cache; fi"
+                ),
             ],
             log,
             cancel=cancel,
