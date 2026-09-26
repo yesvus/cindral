@@ -127,7 +127,13 @@ class JobApiMixin:
 
     def _cache_blob(self, store: CacheStore, digest: str) -> None:
         try:
-            blob, size = store.open_blob(digest)
+            blob, size = store.open_blob(
+                digest,
+                self.headers.get("X-Cindral-Repository", ""),  # type: ignore[attr-defined]
+                self.headers.get("X-Cindral-Branch", ""),  # type: ignore[attr-defined]
+                self.headers.get("X-Cindral-Architecture", ""),  # type: ignore[attr-defined]
+                self.headers.get("X-Cindral-Key", ""),  # type: ignore[attr-defined]
+            )
         except FileNotFoundError:
             self._send(404, {"error": "unknown cache blob"})  # type: ignore[attr-defined]
             return

@@ -13,10 +13,12 @@ import threading
 from typing import Callable, TextIO
 
 from .agent import JobSpec
+from .cache import MAX_CACHE_BLOB_BYTES
 from .cache_client import CacheClientError, CindralCacheClient
 
 MAX_RESTORED_CACHE_BYTES = 2 * 1024 * 1024 * 1024
 MAX_CACHE_FILES = 100_000
+MAX_ARCHIVE_CONTENT_BYTES = MAX_CACHE_BLOB_BYTES - 1024 * MAX_CACHE_FILES
 
 
 class CacheArchiveError(ValueError):
@@ -123,35 +125,64 @@ def architecture_name(machine: str) -> str:
     return {"x86_64": "amd64", "aarch64": "arm64"}.get(machine.lower(), machine.lower())
 
 
-def create_archive(directory: Path, destination: Path) -> bool:
+def create_archive(
+    directory: Path,
+    destination: Path,
+    make_readable: Callable[[Path], None] | None = None,
+) -> bool:
     _assert_no_symlink_ancestors(directory)
     if not directory.is_dir() or directory.is_symlink():
         return False
+    try:
+        _write_archive(directory, destination)
+    except PermissionError:
+        if make_readable is None:
+            raise
+        destination.unlink(missing_ok=True)
+        make_readable(directory)
+        _write_archive(directory, destination)
+    with tarfile.open(destination, "r:gz") as archive:
+        return any(member.isfile() and member.size > 0 for member in archive)
+
+
+def _write_archive(directory: Path, destination: Path) -> None:
+    paths: list[tuple[Path, os.stat_result]] = []
+    directories: list[Path] = []
+    total_bytes = 0
+
+    def fail(error: OSError) -> None:
+        raise error
+
+    for current, children, files in os.walk(directory, followlinks=False, onerror=fail):
+        current_path = Path(current)
+        children[:] = [name for name in children if not (current_path / name).is_symlink()]
+        directories.extend(current_path / name for name in children)
+        if len(paths) + len(directories) > MAX_CACHE_FILES:
+            raise CacheArchiveError("cache directory exceeds the file-count limit")
+        for name in files:
+            path = current_path / name
+            file_stat = path.lstat()
+            if not stat.S_ISREG(file_stat.st_mode):
+                continue
+            total_bytes += file_stat.st_size
+            paths.append((path, file_stat))
+            if len(paths) + len(directories) > MAX_CACHE_FILES or total_bytes + 1024 * (len(paths) + len(directories)) > MAX_ARCHIVE_CONTENT_BYTES:
+                raise CacheArchiveError("cache directory exceeds archive limits")
+    if len(paths) + len(directories) > MAX_CACHE_FILES:
+        raise CacheArchiveError("cache directory exceeds the file-count limit")
     with tarfile.open(destination, "w:gz") as archive:
-        for current, directories, files in os.walk(directory, followlinks=False):
-            current_path = Path(current)
-            directories[:] = [name for name in directories if not (current_path / name).is_symlink()]
-            for name in directories:
-                path = current_path / name
-                info = tarfile.TarInfo(path.relative_to(directory).as_posix())
-                info.type = tarfile.DIRTYPE
-                info.mode = 0o755
-                archive.addfile(info)
-            for name in files:
-                path = current_path / name
-                try:
-                    file_stat = path.lstat()
-                except OSError:
-                    continue
-                if not stat.S_ISREG(file_stat.st_mode):
-                    continue
-                info = tarfile.TarInfo(path.relative_to(directory).as_posix())
-                fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-                with os.fdopen(fd, "rb") as source:
-                    info.size = os.fstat(source.fileno()).st_size
-                    info.mode = 0o755 if info.size and os.fstat(source.fileno()).st_mode & 0o111 else 0o644
-                    archive.addfile(info, source)
-    return destination.stat().st_size > 0
+        for path in directories:
+            info = tarfile.TarInfo(path.relative_to(directory).as_posix())
+            info.type = tarfile.DIRTYPE
+            info.mode = 0o755
+            archive.addfile(info)
+        for path, file_stat in paths:
+            info = tarfile.TarInfo(path.relative_to(directory).as_posix())
+            info.size = file_stat.st_size
+            info.mode = 0o755 if file_stat.st_mode & 0o111 else 0o644
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            with os.fdopen(fd, "rb") as source:
+                archive.addfile(info, source)
 
 
 def restore_archive(archive_path: Path, destination: Path) -> None:
@@ -225,10 +256,17 @@ def restore_caches(
                 continue
             with tempfile.TemporaryDirectory(dir=workspace) as temporary:
                 archive = Path(temporary) / "cache.tar.gz"
-                client.download(str(entry["digest"]), archive)
+                client.download(
+                    str(entry["digest"]),
+                    archive,
+                    job.repository,
+                    job.ref,
+                    plan.architecture,
+                    str(entry["key"]),
+                )
                 restore_archive(archive, plan.path)
             log.write(f"cindral: cache hit {plan.name} ({entry['key']})\n")
-        except (CacheClientError, OSError, ValueError, KeyError) as exc:
+        except (CacheClientError, OSError, ValueError, KeyError, tarfile.TarError, EOFError) as exc:
             log.write(f"cindral: cache restore skipped for {plan.name}: {exc}\n")
     return environment
 
@@ -239,6 +277,7 @@ def store_caches(
     plans: tuple[CachePlan, ...],
     workspace: Path,
     log: TextIO,
+    make_readable: Callable[[Path], None] | None = None,
 ) -> None:
     if client is None:
         return
@@ -246,12 +285,12 @@ def store_caches(
         try:
             with tempfile.TemporaryDirectory(dir=workspace) as temporary:
                 archive = Path(temporary) / "cache.tar.gz"
-                if not create_archive(plan.path, archive):
+                if not create_archive(plan.path, archive, make_readable):
                     continue
                 result = client.upload(job.repository, job.ref, plan.architecture, plan.key, archive)
             outcome = "stored" if result.get("created") else "already exists"
             log.write(f"cindral: cache {outcome} {plan.name}\n")
-        except (CacheClientError, OSError, ValueError) as exc:
+        except (CacheClientError, OSError, ValueError, tarfile.TarError, EOFError) as exc:
             log.write(f"cindral: cache write skipped for {plan.name}: {exc}\n")
 
 
@@ -263,6 +302,7 @@ def run_cached_job(
     cancel: threading.Event,
     client: CindralCacheClient | None,
     run_steps: Callable[[Path | None, dict[str, str]], int],
+    make_readable: Callable[[Path], None] | None = None,
 ) -> int:
     cache_root = workspace / "cache"
     try:
@@ -274,7 +314,7 @@ def run_cached_job(
     mount = cache_root if any(plan.environment for plan in plans) else None
     result = run_steps(mount, environment)
     if result == 0 and not cancel.is_set():
-        store_caches(client, job, plans, workspace, log)
+        store_caches(client, job, plans, workspace, log, make_readable)
     return result
 
 

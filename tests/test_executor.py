@@ -1,4 +1,5 @@
 import hashlib
+import platform
 import shutil
 import threading
 import unittest
@@ -8,6 +9,7 @@ from unittest import mock
 
 from cindral.agent import JobSpec
 from cindral.contract import CONTRACT_PATH
+from cindral.cache_adapters import architecture_name
 from cindral.executor import DockerExecutor, ProcessRunner, tail
 
 CONTRACT = """
@@ -135,7 +137,7 @@ class FakeCacheClient:
         self.lookups.append((repository, branch, architecture, key, restore_keys))
         return self.entries.get((repository, branch, architecture, key))
 
-    def download(self, digest, destination):
+    def download(self, digest, destination, repository, branch, architecture, key):
         destination.write_bytes(self.blobs[digest])
 
     def upload(self, repository, branch, architecture, key, source):
@@ -184,7 +186,10 @@ class DockerExecutorTest(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(len(cache.lookups), 1)
-        self.assertEqual(cache.lookups[0][:3], ("example-org/example-app", "main", "arm64"))
+        self.assertEqual(
+            cache.lookups[0][:3],
+            ("example-org/example-app", "main", architecture_name(platform.machine())),
+        )
         self.assertEqual(len(cache.uploads), 1)
         self.assertIn("cache miss pnpm", result.log)
         self.assertIn("cache stored pnpm", result.log)
@@ -287,6 +292,14 @@ class DockerExecutorTest(unittest.TestCase):
         self.assertTrue(any(f"-v {socket}:{socket}" in c for c in joined))
         self.assertTrue(any(f"-v {fake}:{fake}:ro" in c for c in joined))
         self.assertTrue(any("--group-add" in c for c in joined))
+
+    def test_missing_docker_socket_is_reported_as_executor_failure(self) -> None:
+        runner = FakeRunner(contract=DOCKER_CONTRACT)
+        with TemporaryDirectory() as tmp:
+            with mock.patch("cindral.docker_support.DOCKER_SOCKET", str(Path(tmp) / "missing.sock")):
+                result = executor(runner, tmp)(spec(), threading.Event())
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("docker but", result.log)
 
     def test_waits_for_a_service_health_check(self) -> None:
         contract = CONTRACT.replace("[image]", HEALTH_SERVICE + "\n[image]")

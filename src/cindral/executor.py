@@ -18,7 +18,7 @@ from .agent import JobSpec
 from .cache_adapters import run_cached_job
 from .cache_client import CindralCacheClient
 from .contract import CONTRACT_PATH, Contract, ContractError, Service
-from .docker_support import docker_cli_mounts
+from .docker_support import docker_cli_mounts, make_cache_readable
 from .models import ExecutionResult
 
 MAX_LOG_CHARS = 64 * 1024
@@ -233,6 +233,9 @@ class DockerExecutor:
                 lambda cache_root, cache_environment: self._run_steps(
                     job, contract, image, workspace, log, cancel, cache_root, cache_environment
                 ),
+                lambda cache_path: make_cache_readable(
+                    self.runner, self.docker, cache_path, image, log, cancel
+                ),
             )
         except ExecutorError as exc:
             log.write(f"cindral: {exc}\n")
@@ -286,7 +289,10 @@ class DockerExecutor:
         cache_root: Path | None = None,
         cache_environment: dict[str, str] | None = None,
     ) -> int:
-        docker_cli = docker_cli_mounts(self.docker) if contract.docker else []
+        try:
+            docker_cli = docker_cli_mounts(self.docker) if contract.docker else []
+        except ValueError as exc:
+            raise ExecutorError(str(exc)) from exc
         network = f"cindral-{job.id}"
         # one container per job, so installs persist across steps the way they
         # do in a single CI job; the checkout is mounted from the workspace
@@ -338,9 +344,9 @@ class DockerExecutor:
             ]
             if cache_root is not None:
                 argv += ["-v", f"{cache_root}:/cindral-cache"]
-            for key, value in (cache_environment or {}).items():
-                argv += ["-e", f"{key}={value}"]
             for key, value in contract.env.items():
+                argv += ["-e", f"{key}={value}"]
+            for key, value in (cache_environment or {}).items():
                 argv += ["-e", f"{key}={value}"]
             argv += [image, self.shell, "-lc", "sh /workspace/run.sh"]
             code = self.runner.run(argv, log, cancel=cancel)

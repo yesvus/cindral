@@ -48,10 +48,32 @@ class CindralCacheClient:
             result = json.loads(body)
         except json.JSONDecodeError as exc:
             raise CacheClientError("cache lookup returned invalid JSON") from exc
-        return result.get("entry") if result.get("hit") else None
+        if not isinstance(result, dict) or not isinstance(result.get("hit"), bool):
+            raise CacheClientError("cache lookup returned an invalid response")
+        entry = result.get("entry")
+        if result["hit"] and not isinstance(entry, dict):
+            raise CacheClientError("cache lookup returned an invalid entry")
+        return entry if result["hit"] else None
 
-    def download(self, digest: str, destination: Path) -> None:
-        connection, response = self._open("GET", f"/v1/cache/blobs/{quote(digest, safe='')}")
+    def download(
+        self,
+        digest: str,
+        destination: Path,
+        repository: str,
+        branch: str,
+        architecture: str,
+        key: str,
+    ) -> None:
+        connection, response = self._open(
+            "GET",
+            f"/v1/cache/blobs/{quote(digest, safe='')}",
+            {
+                "X-Cindral-Repository": repository,
+                "X-Cindral-Branch": branch,
+                "X-Cindral-Architecture": architecture,
+                "X-Cindral-Key": key,
+            },
+        )
         try:
             if response.status != 200:
                 body = response.read(1024 * 1024).decode(errors="replace")
@@ -109,9 +131,12 @@ class CindralCacheClient:
                     f"cache upload failed with HTTP {response.status}: {body.decode(errors='replace')}"
                 )
             try:
-                return json.loads(body)
+                result = json.loads(body)
             except json.JSONDecodeError as exc:
                 raise CacheClientError("cache upload returned invalid JSON") from exc
+            if not isinstance(result, dict) or not isinstance(result.get("entry"), dict):
+                raise CacheClientError("cache upload returned an invalid response")
+            return result
         finally:
             connection.close()
 
@@ -129,9 +154,13 @@ class CindralCacheClient:
         finally:
             connection.close()
 
-    def _open(self, method: str, path: str):
+    def _open(self, method: str, path: str, headers: dict[str, str] | None = None):
         connection = self._connection()
-        connection.request(method, self._path(path), headers={"Authorization": f"Bearer {self.token}"})
+        connection.request(
+            method,
+            self._path(path),
+            headers={"Authorization": f"Bearer {self.token}", **(headers or {})},
+        )
         response = connection.getresponse()
         return connection, response
 

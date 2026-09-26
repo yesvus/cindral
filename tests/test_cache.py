@@ -23,7 +23,7 @@ class CacheStoreTest(unittest.TestCase):
 
         hit = self.store.lookup("owner/repo", "main", "arm64", "pnpm-arm64-lock1", now=11)
         self.assertEqual(hit, entry)
-        path, size = self.store.open_blob(entry.digest)
+        path, size = self.store.open_blob(entry.digest, "owner/repo", "main", "arm64", entry.key, now=11)
         with path:
             self.assertEqual(path.read(), b"package-data")
         self.assertEqual(size, len(b"package-data"))
@@ -34,6 +34,14 @@ class CacheStoreTest(unittest.TestCase):
         self.assertTrue(created)
         self.assertFalse(overwritten)
         self.assertEqual(second.digest, first.digest)
+        self.assertEqual(list((Path(self.tmp.name) / "cache").glob("upload-*")), [])
+
+    def test_put_replaces_an_entry_that_has_expired(self) -> None:
+        store = CacheStore(Path(self.tmp.name) / "expiry", ttl_seconds=2)
+        old, _ = store.put("owner/repo", "main", "arm64", "key", io.BytesIO(b"old"), 3, now=1)
+        new, created = store.put("owner/repo", "main", "arm64", "key", io.BytesIO(b"new"), 3, now=4)
+        self.assertTrue(created)
+        self.assertNotEqual(old.digest, new.digest)
 
     def test_restore_prefix_stays_within_branch_and_architecture(self) -> None:
         self.put("pnpm-arm64-old", b"data")
@@ -73,12 +81,19 @@ class CacheStoreTest(unittest.TestCase):
         self.assertIsNotNone(store.lookup("owner/second", "main", "arm64", "second", now=3))
 
     def test_rejects_invalid_scope_and_oversized_blobs(self) -> None:
+        limited = CacheStore(
+            Path(self.tmp.name) / "limited",
+            ttl_seconds=100,
+            repository_quota=20,
+            storage_quota=30,
+            max_blob_bytes=12,
+        )
         with self.assertRaises(CacheError):
             self.store.lookup("../repo", "main", "arm64", "key")
         with self.assertRaises(CacheError):
             self.store.lookup("owner/repo", "main", "arm64", "bad key")
         with self.assertRaises(CacheError):
-            self.store.put("owner/repo", "main", "arm64", "large", io.BytesIO(b""), 13)
+            limited.put("owner/repo", "main", "arm64", "large", io.BytesIO(b"x" * 13), 13)
 
     def test_short_upload_does_not_create_an_entry(self) -> None:
         with self.assertRaises(CacheError):

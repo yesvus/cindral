@@ -141,8 +141,8 @@ class CacheStore:
         current = time.time() if now is None else now
         with self._lock, self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            self._expire(connection, current)
-            self._collect_blobs(connection)
+            if self._expire(connection, current):
+                self._collect_blobs(connection)
             row = connection.execute(
                 "SELECT * FROM cache_entries WHERE repository=? AND branch=? AND architecture=? AND key=?",
                 (repository, branch, architecture, key),
@@ -212,12 +212,14 @@ class CacheStore:
             hexdigest = digest.hexdigest()
             with self._lock, self._connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
+                self._expire(connection, current)
                 existing = connection.execute(
                     "SELECT * FROM cache_entries WHERE repository=? AND branch=? AND architecture=? AND key=?",
                     (repository, branch, architecture, key),
                 ).fetchone()
                 if existing is not None:
                     connection.execute("COMMIT")
+                    os.unlink(temporary)
                     return self._entry(existing), False
                 blob = self.blob_path(hexdigest)
                 blob.parent.mkdir(parents=True, exist_ok=True)
@@ -242,9 +244,33 @@ class CacheStore:
                 os.unlink(temporary)
             raise
 
-    def open_blob(self, digest: str) -> tuple[BinaryIO, int]:
+    def open_blob(
+        self,
+        digest: str,
+        repository: str,
+        branch: str,
+        architecture: str,
+        key: str,
+        now: float | None = None,
+    ) -> tuple[BinaryIO, int]:
         if not _DIGEST.fullmatch(digest):
             raise CacheError("invalid content digest")
+        self.validate_scope(repository, branch, architecture, key)
+        with self._connection() as connection:
+            entry = connection.execute(
+                "SELECT 1 FROM cache_entries WHERE repository=? AND branch=? AND architecture=?"
+                " AND key=? AND digest=? AND accessed_at>=?",
+                (
+                    repository,
+                    branch,
+                    architecture,
+                    key,
+                    digest,
+                    (time.time() if now is None else now) - self.ttl_seconds,
+                ),
+            ).fetchone()
+        if entry is None:
+            raise FileNotFoundError(digest)
         path = self.blob_path(digest)
         if not path.is_file():
             raise FileNotFoundError(digest)
@@ -292,8 +318,9 @@ class CacheStore:
             )
         )
 
-    def _expire(self, connection: sqlite3.Connection, now: float) -> None:
-        connection.execute("DELETE FROM cache_entries WHERE accessed_at < ?", (now - self.ttl_seconds,))
+    def _expire(self, connection: sqlite3.Connection, now: float) -> bool:
+        cursor = connection.execute("DELETE FROM cache_entries WHERE accessed_at < ?", (now - self.ttl_seconds,))
+        return cursor.rowcount > 0
 
     def _enforce_quota(self, connection: sqlite3.Connection, repository: str) -> None:
         self._evict_to_quota(connection, repository, self.repository_quota)

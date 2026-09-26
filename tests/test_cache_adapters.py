@@ -1,10 +1,14 @@
 import io
+import os
 import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from cindral.agent import JobSpec
 from cindral.cache_adapters import (
+    CachePlan,
     CacheArchiveError,
     create_archive,
     detect_cache_plans,
@@ -42,6 +46,27 @@ class CacheAdapterTest(unittest.TestCase):
         lock.write_text("second\n")
         second = detect_cache_plans(repo, self.root / "cache", "arm64")[0].key
         self.assertNotEqual(first, second)
+
+    def test_detects_npm_and_pip_caches_from_their_lockfiles(self) -> None:
+        repo = self.root / "repo"
+        repo.mkdir()
+        npm_lock = repo / "package-lock.json"
+        pip_lock = repo / "requirements-prod.txt"
+        npm_lock.write_text('{"lockfileVersion":3}')
+        pip_lock.write_text("requests==2.32.0\n")
+
+        plans = detect_cache_plans(repo, self.root / "cache", "amd64")
+
+        self.assertEqual({plan.name for plan in plans}, {"npm", "pip"})
+        npm = next(plan for plan in plans if plan.name == "npm")
+        pip = next(plan for plan in plans if plan.name == "pip")
+        self.assertEqual(dict(npm.environment), {"npm_config_cache": "/cindral-cache/npm"})
+        self.assertEqual(dict(pip.environment), {"PIP_CACHE_DIR": "/cindral-cache/pip"})
+        initial_keys = {plan.name: plan.key for plan in plans}
+        npm_lock.write_text('{"lockfileVersion":3,"packages":{}}')
+        pip_lock.write_text("requests==2.33.0\n")
+        updated = {plan.name: plan.key for plan in detect_cache_plans(repo, self.root / "cache", "amd64")}
+        self.assertNotEqual(initial_keys, updated)
 
     def test_ignores_lockfiles_that_are_symlinks_outside_the_checkout(self) -> None:
         repo = self.root / "repo"
@@ -82,6 +107,43 @@ class CacheAdapterTest(unittest.TestCase):
         self.assertEqual((restored / "package.data").read_text(), "content")
         self.assertFalse((restored / "external").exists())
 
+    def test_retries_archive_after_preparing_root_owned_cache_permissions(self) -> None:
+        cache = self.root / "cache"
+        cache.mkdir()
+        (cache / "package.data").write_text("content")
+        real_open = os.open
+        calls = []
+
+        def open_once_with_permission_error(path, flags, *args, **kwargs):
+            if not calls:
+                calls.append(path)
+                raise PermissionError(path)
+            return real_open(path, flags, *args, **kwargs)
+
+        with patch("cindral.cache_adapters.os.open", side_effect=open_once_with_permission_error):
+            created = create_archive(
+                cache,
+                self.root / "cache.tar.gz",
+                lambda path: calls.append(path),
+            )
+        self.assertTrue(created)
+        self.assertEqual(calls[1], cache)
+
+    def test_empty_cache_directories_do_not_create_archives(self) -> None:
+        empty = self.root / "empty"
+        empty.mkdir()
+        archive = self.root / "empty.tar.gz"
+        self.assertFalse(create_archive(empty, archive))
+
+    def test_cache_archives_enforce_file_count_limits(self) -> None:
+        cache = self.root / "cache"
+        cache.mkdir()
+        (cache / "one").write_text("one")
+        (cache / "two").write_text("two")
+        with patch("cindral.cache_adapters.MAX_CACHE_FILES", 1):
+            with self.assertRaises(CacheArchiveError):
+                create_archive(cache, self.root / "too-many.tar.gz")
+
     def test_rejects_traversal_paths_during_restore(self) -> None:
         archive_path = self.root / "unsafe.tar.gz"
         with tarfile.open(archive_path, "w:gz") as archive:
@@ -92,6 +154,22 @@ class CacheAdapterTest(unittest.TestCase):
         with self.assertRaises(CacheArchiveError):
             restore_archive(archive_path, self.root / "restore")
         self.assertFalse((self.root / "escape").exists())
+
+    def test_invalid_cached_archives_degrade_to_a_cache_miss(self) -> None:
+        class Client:
+            def lookup(self, *args):
+                return {"digest": "a" * 64, "key": "key"}
+
+            def download(self, digest, destination, *args):
+                destination.write_bytes(b"not a gzip archive")
+
+        plan = (
+            CachePlan("pnpm", "arm64", "key", (), self.root / "cache" / "pnpm"),
+        )
+        job = JobSpec("id", "owner/repo", "sha", "main", (), 60)
+        output = io.StringIO()
+        restore_caches(Client(), job, plan, self.root, output)
+        self.assertIn("cache restore skipped for pnpm", output.getvalue())
 
 
 if __name__ == "__main__":
