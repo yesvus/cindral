@@ -18,9 +18,12 @@ run = "python -m compileall -q src"
 run = "python -m unittest discover -s tests"
 
 # The control panel is a separate toolchain, so it is checked in a node
-# container against the daemon this contract already mounts.
+# container against the daemon this contract already mounts. The sources are
+# copied in rather than bind-mounted: a -v source is resolved by the daemon on
+# the host, not inside this container, so an in-container path silently mounts
+# an empty directory and pnpm reports a missing lockfile.
 [[steps]]
-run = "docker run --rm -v \"$PWD/web:/app\" -w /app node:22-bookworm sh -lc 'corepack enable && pnpm install --frozen-lockfile && pnpm run ci'"
+run = "docker rm -f cindral-panel-ci-node >/dev/null 2>&1 || true; docker create --name cindral-panel-ci-node -w /app node:22-bookworm sh -lc 'corepack enable && pnpm install --frozen-lockfile && pnpm run ci' >/dev/null && docker cp web/. cindral-panel-ci-node:/app && docker start -a cindral-panel-ci-node; code=$?; docker rm -f cindral-panel-ci-node >/dev/null 2>&1 || true; exit $code"
 
 # The panel ships as a container, so the runtime image is built and booted here.
 # An import or runtime failure in the standalone server only surfaces once the
