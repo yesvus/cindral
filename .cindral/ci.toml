@@ -23,7 +23,7 @@ run = "python -m unittest discover -s tests"
 # the host, not inside this container, so an in-container path silently mounts
 # an empty directory and pnpm reports a missing lockfile.
 [[steps]]
-run = "docker rm -f cindral-panel-ci-node >/dev/null 2>&1 || true; docker create --name cindral-panel-ci-node -w /app node:22-bookworm sh -lc 'corepack enable && pnpm install --frozen-lockfile && pnpm run ci' >/dev/null && docker cp web/. cindral-panel-ci-node:/app && docker start -a cindral-panel-ci-node; code=$?; docker rm -f cindral-panel-ci-node >/dev/null 2>&1 || true; exit $code"
+run = "docker rm -f cindral-panel-ci-node >/dev/null 2>&1 || true; docker create --name cindral-panel-ci-node -w /app node:22-bookworm sh -lc 'corepack enable && pnpm install --frozen-lockfile && pnpm run ci' >/dev/null && docker cp web/. cindral-panel-ci-node:/app && docker start -a cindral-panel-ci-node"
 
 # The panel ships as a container, so the runtime image is built and booted here.
 # An import or runtime failure in the standalone server only surfaces once the
@@ -34,25 +34,25 @@ run = "docker rm -f cindral-panel-ci-node >/dev/null 2>&1 || true; docker create
 run = "docker build -t cindral-panel:ci web"
 
 [[steps]]
-run = "docker network create cindral-panel-ci-net"
+run = "docker network rm cindral-panel-ci-net >/dev/null 2>&1 || true; docker network create cindral-panel-ci-net"
 
 # A stub broker that returns a real snapshot. The signed-in pages only build
 # their tables when the snapshot has devices and jobs, so pointing the panel at
 # a dead broker would pass even with a broken page.
 [[steps]]
-run = "docker run -d --name cindral-panel-ci-broker --network cindral-panel-ci-net --network-alias broker node:22-bookworm node -e \"require('http').createServer((q,s)=>{s.setHeader('content-type','application/json');s.end(JSON.stringify({devices:[{name:'ci-device',status:'online',healthy:true,busy:false,labels:['linux'],current_lease:null,leases:[]}],queue_depth:{pending:1,running:0,success:2,failure:0},expired_lease_count:0,oldest_pending_age_seconds:5,reclaim_count:0,success_count:2,failure_count:0,recent_jobs:[{id:'a'.repeat(32),repository:'org/app',sha:'b'.repeat(40),ref:'main',command:['ci'],labels:[],timeout:60,status:'success',device:'ci-device',exit_code:0,attempts:1,status_sha:null,log:'ok'}]}))}).listen(8095)\""
+run = "docker rm -f cindral-panel-ci-broker >/dev/null 2>&1 || true; docker run -d --name cindral-panel-ci-broker --network cindral-panel-ci-net --network-alias broker node:22-bookworm node -e \"require('http').createServer((q,s)=>{s.setHeader('content-type','application/json');s.end(JSON.stringify({devices:[{name:'ci-device',status:'online',healthy:true,busy:false,labels:['linux'],current_lease:null,leases:[]}],queue_depth:{pending:1,running:0,success:2,failure:0},expired_lease_count:0,oldest_pending_age_seconds:5,reclaim_count:0,success_count:2,failure_count:0,recent_jobs:[{id:'a'.repeat(32),repository:'org/app',sha:'b'.repeat(40),ref:'main',command:['ci'],labels:[],timeout:60,status:'success',device:'ci-device',exit_code:0,attempts:1,status_sha:null,log:'ok'}]}))}).listen(8095)\""
 
 [[steps]]
-run = "docker run -d --name cindral-panel-ci --network cindral-panel-ci-net -e CINDRAL_PANEL_EMAIL=ci@example.com -e CINDRAL_PANEL_PASSWORD=ci -e CINDRAL_SESSION_SECRET=ci-secret -e CINDRAL_POOL_TOKEN=ci-pool -e CINDRAL_API_URL=http://broker:8095 cindral-panel:ci"
+run = "docker rm -f cindral-panel-ci >/dev/null 2>&1 || true; docker run -d --name cindral-panel-ci --network cindral-panel-ci-net -e CINDRAL_PANEL_EMAIL=ci@example.com -e CINDRAL_PANEL_PASSWORD=ci -e CINDRAL_SESSION_SECRET=ci-secret -e CINDRAL_POOL_TOKEN=ci-pool -e CINDRAL_API_URL=http://broker:8095 cindral-panel:ci"
 
 [[steps]]
 run = "sleep 4 && docker exec cindral-panel-ci node -e \"var s=Buffer.from(JSON.stringify({email:'ci@example.com',expires:Math.floor(Date.now()/1000)+600})).toString('base64url');var sig=require('crypto').createHmac('sha256','ci-secret').update(s).digest('base64url');var pages=['/','/devices','/jobs'];Promise.all(pages.map(function(p){return fetch('http://127.0.0.1:3000'+p,{redirect:'manual',headers:{cookie:'cindral_session='+s+'.'+sig}}).then(function(r){console.log(p,r.status);return r.status===200})})).then(function(ok){process.exit(ok.every(Boolean)?0:1)}).catch(function(e){console.error(e.message);process.exit(1)})\""
 
 [[steps]]
-run = "docker logs cindral-panel-ci 2>&1 | grep -q 'Functions cannot be passed' && echo 'panel pages failed to render' && exit 1 || true"
+run = "! docker logs cindral-panel-ci 2>&1 | grep -q 'Functions cannot be passed' || { echo 'panel pages failed to render'; false; }"
 
 [[steps]]
-run = "docker rm -f cindral-panel-ci cindral-panel-ci-broker && docker network rm cindral-panel-ci-net"
+run = "docker rm -f cindral-panel-ci cindral-panel-ci-broker cindral-panel-ci-node; docker network rm cindral-panel-ci-net"
 
 # Unit tests run against an editable install, so they cannot detect a
 # dependency the Dockerfile forgets to install. That only surfaces when the
