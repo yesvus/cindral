@@ -1,0 +1,49 @@
+name: publish-broker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "Dockerfile"
+      - "config/**"
+      - "examples/**"
+      - "pyproject.toml"
+      - "VERSION"
+      - ".github/workflows/publish-broker.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - id: version
+        run: echo "tag=$(tr -d 'v\n' < VERSION)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          # GITHUB_TOKEN is refused on a package not linked to this repository
+          password: ${{ secrets.GHCR_TOKEN }}
+      # The version tag comes from VERSION; the commit tag keeps a specific
+      # build addressable after a later main moves the version tag. Ops pins a
+      # digest, so a rebuild that changed nothing under src/ resolves to the
+      # same digest and does not trigger a rollout.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/cindral:${{ steps.version.outputs.tag }}
+            ghcr.io/${{ github.repository_owner }}/cindral:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # A build that cannot import its own module would roll out a broken image
+      - run: docker run --rm ghcr.io/${{ github.repository_owner }}/cindral:${{ steps.version.outputs.tag }} --help
