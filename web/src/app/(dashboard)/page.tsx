@@ -1,4 +1,5 @@
 import {
+  AdminBanner,
   AdminPageHeader,
   AdminStatCard,
   AdminStatusPill,
@@ -14,8 +15,8 @@ export const dynamic = "force-dynamic";
 export default async function OverviewPage() {
   const snapshot = await getPoolSnapshot();
 
-  const pendingCount = snapshot?.queue_depth.pending ?? 0;
-  const runningCount = snapshot?.queue_depth.running ?? 0;
+  const pendingCount = snapshot?.queue_depth?.pending ?? 0;
+  const runningCount = snapshot?.queue_depth?.running ?? 0;
   const successCount = snapshot?.success_count ?? 0;
   const failureCount = snapshot?.failure_count ?? 0;
   const reclaimCount = snapshot?.reclaim_count ?? 0;
@@ -101,6 +102,14 @@ export default async function OverviewPage() {
   return (
     <div className="space-y-6">
       <AdminPageHeader title="Pool Overview" />
+
+      {!snapshot && (
+        <AdminBanner
+          tone="warning"
+          title="Broker API unreachable"
+          body="Could not fetch pool snapshot from the Cindral broker. Verify CINDRAL_API_URL and network connectivity."
+        />
+      )}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <AdminStatCard
