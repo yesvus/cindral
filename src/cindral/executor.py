@@ -134,10 +134,12 @@ class DockerExecutor:
         self.runner = runner or ProcessRunner()
         self.shell = shell
         self.cleanup = cleanup
+        self._cleanup_image: str | None = None
 
     def __call__(self, job: JobSpec, cancel: threading.Event) -> ExecutionResult:
         workspace = self.workspace_root / job.id
         log_path = (self.log_dir / f"{job.id}.log") if self.log_dir else None
+        self._cleanup_image = None
         if log_path is not None:
             log_path.parent.mkdir(parents=True, exist_ok=True)
             log_handle: TextIO = log_path.open("w")
@@ -148,9 +150,58 @@ class DockerExecutor:
                 exit_code = self._execute(job, cancel, workspace, log)
         finally:
             if self.cleanup:
-                shutil.rmtree(workspace, ignore_errors=True)
+                cleanup_warning = self._cleanup_workspace(workspace)
+            else:
+                cleanup_warning = None
         text = log_path.read_text(errors="replace") if log_path else ""
+        if cleanup_warning:
+            if log_path is not None:
+                with log_path.open("a") as log:
+                    log.write(f"cindral: warning: {cleanup_warning}\n")
+                text = log_path.read_text(errors="replace")
+            else:
+                text = f"cindral: warning: {cleanup_warning}\n"
         return ExecutionResult(exit_code=exit_code, log=tail(text))
+
+    def _cleanup_workspace(self, workspace: Path) -> str | None:
+        try:
+            shutil.rmtree(workspace)
+            return None
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            if not workspace.exists():
+                return None
+            if not self._cleanup_image:
+                return f"could not remove workspace {workspace}: {exc}"
+
+        command = [
+            self.docker,
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--user",
+            "0:0",
+            "-v",
+            f"{workspace}:/cleanup",
+            "--entrypoint",
+            self.shell,
+            self._cleanup_image,
+            "-lc",
+            "rm -rf /cleanup/* /cleanup/.[!.]* /cleanup/..?*",
+        ]
+        with open(os.devnull, "w") as log:
+            code = self.runner.run(command, log)
+        if code != 0:
+            return f"could not remove root-owned files from workspace {workspace} (cleanup container exited {code})"
+        try:
+            shutil.rmtree(workspace)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            return f"could not remove workspace {workspace} after container cleanup: {exc}"
+        return None
 
     def _execute(
         self,
@@ -173,6 +224,7 @@ class DockerExecutor:
             except ContractError as exc:
                 raise ExecutorError(str(exc)) from exc
             image = self._image(job, repo, contract, log, cancel)
+            self._cleanup_image = image
             return self._run_steps(job, contract, image, workspace, log, cancel)
         except ExecutorError as exc:
             log.write(f"cindral: {exc}\n")
