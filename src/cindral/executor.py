@@ -234,7 +234,7 @@ class DockerExecutor:
                     job, contract, image, workspace, log, cancel, cache_root, cache_environment
                 ),
                 lambda cache_path: make_cache_readable(
-                    self.runner, self.docker, cache_path, image, log, cancel
+                    self.runner, self.docker, cache_path, image, log, cancel, self.shell
                 ),
             )
         except ExecutorError as exc:

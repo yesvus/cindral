@@ -201,7 +201,7 @@ class CacheAdapterTest(unittest.TestCase):
         store_caches(IncompleteClient(), job, plan, self.root, output_store)
         self.assertIn("cache write skipped for pnpm", output_store.getvalue())
 
-    def test_make_cache_readable_invokes_chown_with_agent_uid_and_gid(self) -> None:
+    def test_make_cache_readable_invokes_chown_with_fallback(self) -> None:
         runner = MagicMock()
         log = io.StringIO()
         cancel = threading.Event()
@@ -219,8 +219,8 @@ class CacheAdapterTest(unittest.TestCase):
         self.assertIn("--user", cmd)
         self.assertIn("0:0", cmd)
         self.assertIn("--entrypoint", cmd)
-        self.assertIn("chown", cmd)
-        self.assertIn(f"{uid}:{gid}", cmd)
+        self.assertIn("sh", cmd)
+        self.assertIn(f"chown -R {uid}:{gid} /cindral-cache 2>/dev/null || chmod -R a+rX /cindral-cache", cmd)
 
 
 if __name__ == "__main__":

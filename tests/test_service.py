@@ -456,6 +456,16 @@ class JobEndpointTest(unittest.TestCase):
                 client.download(uploaded["entry"]["digest"], other_scope, "another/repo", "main", "arm64", "key")
             self.assertFalse(other_scope.exists())
 
+    def test_download_failure_preserves_preexisting_destination(self) -> None:
+        client = CindralCacheClient(f"http://127.0.0.1:{self.port}", AGENT_TOKEN)
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp) / "preexisting.tar.gz"
+            destination.write_bytes(b"original data")
+            with self.assertRaises(CacheClientError):
+                client.download("0" * 64, destination, REPO, "main", "arm64", "nonexistent")
+            self.assertTrue(destination.exists())
+            self.assertEqual(destination.read_bytes(), b"original data")
+
     def test_pool_preflight_allows_the_bearer_header(self) -> None:
         connection = HTTPConnection("127.0.0.1", self.port, timeout=10)
         connection.request("OPTIONS", "/v1/pool")

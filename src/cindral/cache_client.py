@@ -2,6 +2,7 @@
 import hashlib
 import http.client
 import json
+import os
 from pathlib import Path
 import ssl
 from urllib.parse import quote, urlsplit
@@ -74,6 +75,7 @@ class CindralCacheClient:
                 "X-Cindral-Key": key,
             },
         )
+        temp_destination = destination.parent / f".tmp-{destination.name}-{os.getpid()}"
         try:
             if response.status != 200:
                 body = response.read(1024 * 1024).decode(errors="replace")
@@ -83,16 +85,17 @@ class CindralCacheClient:
                 raise CacheClientError("cache download has an invalid size")
             digest_state = hashlib.sha256()
             written = 0
-            with destination.open("wb") as output:
+            with temp_destination.open("wb") as output:
                 while block := response.read(1024 * 1024):
                     output.write(block)
                     digest_state.update(block)
                     written += len(block)
             if written != length or digest_state.hexdigest() != digest:
-                destination.unlink(missing_ok=True)
+                temp_destination.unlink(missing_ok=True)
                 raise CacheClientError("cache blob failed its content digest check")
+            temp_destination.replace(destination)
         except (http.client.HTTPException, OSError) as exc:
-            destination.unlink(missing_ok=True)
+            temp_destination.unlink(missing_ok=True)
             raise CacheClientError(f"cache download failed: {exc}") from exc
         finally:
             response.close()

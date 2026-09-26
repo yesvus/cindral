@@ -43,6 +43,7 @@ def make_cache_readable(
     image: str,
     log: TextIO,
     cancel: threading.Event,
+    shell: str = "sh",
 ) -> None:
     uid = os.getuid() if hasattr(os, "getuid") else 0
     gid = os.getgid() if hasattr(os, "getgid") else 0
@@ -59,11 +60,10 @@ def make_cache_readable(
                 "-v",
                 f"{cache_path}:/cindral-cache",
                 "--entrypoint",
-                "chown",
+                shell,
                 image,
-                "-R",
-                f"{uid}:{gid}",
-                "/cindral-cache",
+                "-lc",
+                f"chown -R {uid}:{gid} /cindral-cache 2>/dev/null || chmod -R a+rX /cindral-cache",
             ],
             log,
             cancel=cancel,
