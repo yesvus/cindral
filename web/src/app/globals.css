@@ -1,4 +1,4 @@
 @import "tailwindcss";
 @import "@yesvus/helmdeck/theme.css";
 
-@source "../../../node_modules/@yesvus/helmdeck";
+@source "../../node_modules/@yesvus/helmdeck";
