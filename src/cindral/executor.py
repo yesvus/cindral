@@ -15,13 +15,14 @@ from pathlib import Path
 from typing import TextIO
 
 from .agent import JobSpec
+from .cache_adapters import run_cached_job
+from .cache_client import CindralCacheClient
 from .contract import CONTRACT_PATH, Contract, ContractError, Service
+from .docker_support import docker_cli_mounts, make_cache_readable
 from .models import ExecutionResult
 
 MAX_LOG_CHARS = 64 * 1024
 
-DOCKER_SOCKET = "/var/run/docker.sock"
-DOCKER_PLUGIN_DIRS = ("/usr/libexec/docker/cli-plugins", "/usr/local/lib/docker/cli-plugins")
 SERVICE_HEALTH_TIMEOUT = 90
 SERVICE_HEALTH_POLL_SECONDS = 2
 
@@ -124,6 +125,7 @@ class DockerExecutor:
         runner: ProcessRunner | None = None,
         shell: str = "sh",
         cleanup: bool = True,
+        cache_client: CindralCacheClient | None = None,
     ) -> None:
         self.token = token or ""
         self.workspace_root = Path(workspace_root)
@@ -134,6 +136,7 @@ class DockerExecutor:
         self.runner = runner or ProcessRunner()
         self.shell = shell
         self.cleanup = cleanup
+        self.cache_client = cache_client
         self._cleanup_image: str | None = None
 
     def __call__(self, job: JobSpec, cancel: threading.Event) -> ExecutionResult:
@@ -225,7 +228,15 @@ class DockerExecutor:
                 raise ExecutorError(str(exc)) from exc
             image = self._image(job, repo, contract, log, cancel)
             self._cleanup_image = image
-            return self._run_steps(job, contract, image, workspace, log, cancel)
+            return run_cached_job(
+                job, repo, workspace, log, cancel, self.cache_client,
+                lambda cache_root, cache_environment: self._run_steps(
+                    job, contract, image, workspace, log, cancel, cache_root, cache_environment
+                ),
+                lambda cache_path: make_cache_readable(
+                    self.runner, self.docker, cache_path, image, log, cancel, self.shell
+                ),
+            )
         except ExecutorError as exc:
             log.write(f"cindral: {exc}\n")
             return 1
@@ -275,8 +286,13 @@ class DockerExecutor:
         workspace: Path,
         log: TextIO,
         cancel: threading.Event,
+        cache_root: Path | None = None,
+        cache_environment: dict[str, str] | None = None,
     ) -> int:
-        docker_cli = self._docker_cli(contract)
+        try:
+            docker_cli = docker_cli_mounts(self.docker) if contract.docker else []
+        except ValueError as exc:
+            raise ExecutorError(str(exc)) from exc
         network = f"cindral-{job.id}"
         # one container per job, so installs persist across steps the way they
         # do in a single CI job; the checkout is mounted from the workspace
@@ -326,7 +342,11 @@ class DockerExecutor:
                 "CI=true",
                 *docker_cli,
             ]
+            if cache_root is not None:
+                argv += ["-v", f"{cache_root}:/cindral-cache"]
             for key, value in contract.env.items():
+                argv += ["-e", f"{key}={value}"]
+            for key, value in (cache_environment or {}).items():
                 argv += ["-e", f"{key}={value}"]
             argv += [image, self.shell, "-lc", "sh /workspace/run.sh"]
             code = self.runner.run(argv, log, cancel=cancel)
@@ -335,31 +355,6 @@ class DockerExecutor:
             for name in services:
                 self.runner.run([self.docker, "rm", "-f", name], log)
             self.runner.run([self.docker, "network", "rm", network], log)
-
-    def _docker_cli(self, contract: Contract) -> list[str]:
-        """Socket and CLI mounts for contracts whose steps build or run images."""
-        if not contract.docker:
-            return []
-        socket = Path(DOCKER_SOCKET)
-        if not socket.exists():
-            raise ExecutorError(f"contract requests docker but {DOCKER_SOCKET} is missing")
-        binary = shutil.which(self.docker)
-        if binary is None:
-            raise ExecutorError(f"contract requests docker but {self.docker} is not on PATH")
-        resolved = str(Path(binary).resolve())
-        mounts = [
-            "-v",
-            f"{socket}:{socket}",
-            "--group-add",
-            str(socket.stat().st_gid),
-            "-v",
-            f"{resolved}:{resolved}:ro",
-        ]
-        for directory in DOCKER_PLUGIN_DIRS:
-            path = Path(directory)
-            if path.is_dir():
-                mounts += ["-v", f"{path}:{path}:ro"]
-        return mounts
 
     def _wait_for_services(
         self,

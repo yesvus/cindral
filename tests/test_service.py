@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -8,6 +9,8 @@ from unittest.mock import patch
 
 from cindral import jobs
 from cindral.github import RepositoryRunner
+from cindral.cache import CacheStore
+from cindral.cache_client import CacheClientError, CindralCacheClient
 from cindral.jobs import JobStore
 from cindral.policy import Policy
 from cindral.service import WEBHOOK_PATH, CindralHandler, CindralServer
@@ -61,7 +64,9 @@ class JobEndpointTest(unittest.TestCase):
         self.server.runner_reservations = {}
         self.server.reservation_seconds = 10
         self.server.jobs = JobStore(str(Path(self._tmp.name) / "jobs.db"))
+        self.server.cache = CacheStore(Path(self._tmp.name) / "cache")
         self.server.agent_token = AGENT_TOKEN
+        self.server.pool_token = POOL_TOKEN
         self.server.pool_token = POOL_TOKEN
         self.server.direct_repositories = (REPO,)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -77,7 +82,7 @@ class JobEndpointTest(unittest.TestCase):
         if authorize:
             merged["Authorization"] = f"Bearer {token or AGENT_TOKEN}"
         merged.update(headers or {})
-        payload = json.dumps(body).encode() if body is not None else None
+        payload = body if isinstance(body, (bytes, bytearray)) else (json.dumps(body).encode() if body is not None else None)
         connection = HTTPConnection("127.0.0.1", self.port, timeout=10)
         connection.request(method, path, body=payload, headers=merged)
         response = connection.getresponse()
@@ -392,6 +397,83 @@ class JobEndpointTest(unittest.TestCase):
         self.assertIn('cindral_queue_depth{state="pending"} 1', raw)
         self.assertIn('cindral_devices{status="online"}', raw)
         self.assertIn("cindral_oldest_pending_seconds", raw)
+        self.assertIn("cindral_cache_hit_ratio", raw)
+
+    def test_cache_api_round_trip_uses_agent_token_and_content_digest(self) -> None:
+        client = CindralCacheClient(f"http://127.0.0.1:{self.port}", AGENT_TOKEN)
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "cache.tar.gz"
+            archive.write_bytes(b"cache contents")
+            uploaded = client.upload(REPO, "main", "arm64", "pnpm-arm64-lock", archive)
+            self.assertTrue(uploaded["created"])
+            entry = client.lookup(REPO, "main", "arm64", "pnpm-arm64-lock")
+            self.assertEqual(entry["digest"], uploaded["entry"]["digest"])
+            destination = Path(tmp) / "restored.tar.gz"
+            client.download(entry["digest"], destination, REPO, "main", "arm64", "pnpm-arm64-lock")
+            self.assertEqual(destination.read_bytes(), b"cache contents")
+
+    def test_cache_lookup_requires_the_agent_token(self) -> None:
+        status, _ = self.call(
+            "POST",
+            "/v1/cache/lookup",
+            {"repository": REPO, "branch": "main", "architecture": "arm64", "key": "key"},
+            authorize=False,
+        )
+        self.assertEqual(status, 401)
+
+    def test_cache_api_refuses_the_read_only_pool_token(self) -> None:
+        status, _ = self.call(
+            "POST",
+            "/v1/cache/lookup",
+            {"repository": REPO, "branch": "main", "architecture": "arm64", "key": "key"},
+            headers={"Authorization": f"Bearer {POOL_TOKEN}"},
+            authorize=False,
+        )
+        self.assertEqual(status, 401)
+        status, _ = self.call(
+            "PUT",
+            "/v1/cache/entries",
+            headers={
+                "Authorization": f"Bearer {POOL_TOKEN}",
+                "Content-Type": "application/octet-stream",
+                "X-Cindral-Repository": REPO,
+                "X-Cindral-Branch": "main",
+                "X-Cindral-Architecture": "arm64",
+                "X-Cindral-Key": "key",
+            },
+            body=b"data",
+            authorize=False,
+        )
+        self.assertEqual(status, 401)
+
+    def test_cache_blob_requires_a_matching_scoped_entry(self) -> None:
+        client = CindralCacheClient(f"http://127.0.0.1:{self.port}", AGENT_TOKEN)
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "cache.tar.gz"
+            archive.write_bytes(b"cache contents")
+            uploaded = client.upload(REPO, "main", "arm64", "key", archive)
+            other_scope = Path(tmp) / "other.tar.gz"
+            with self.assertRaises(CacheClientError):
+                client.download(uploaded["entry"]["digest"], other_scope, "another/repo", "main", "arm64", "key")
+            self.assertFalse(other_scope.exists())
+
+    def test_download_digest_mismatch_preserves_preexisting_destination(self) -> None:
+        client = CindralCacheClient(f"http://127.0.0.1:{self.port}", AGENT_TOKEN)
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "cache.tar.gz"
+            archive.write_bytes(b"cache contents")
+            uploaded = client.upload(REPO, "main", "arm64", "key", archive)
+            digest = uploaded["entry"]["digest"]
+            self.server.cache.blob_path(digest).write_bytes(b"corrupted contents")
+
+            destination = Path(tmp) / "preexisting.tar.gz"
+            destination.write_bytes(b"original data")
+            with self.assertRaises(CacheClientError) as cm:
+                client.download(digest, destination, REPO, "main", "arm64", "key")
+            self.assertIn("content digest check", str(cm.exception))
+            self.assertTrue(destination.exists())
+            self.assertEqual(destination.read_bytes(), b"original data")
+            self.assertFalse((destination.parent / f".tmp-{destination.name}-{os.getpid()}").exists())
 
     def test_pool_preflight_allows_the_bearer_header(self) -> None:
         connection = HTTPConnection("127.0.0.1", self.port, timeout=10)

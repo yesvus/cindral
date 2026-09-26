@@ -55,4 +55,6 @@ class ObservabilityMixin:
             if store is None
             else store.metrics(self.server.runners)
         )
+        if self.server.cache is not None:
+            text += self.server.cache.metrics()
         self._send_text(200, text)  # type: ignore[attr-defined]

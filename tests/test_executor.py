@@ -1,3 +1,5 @@
+import hashlib
+import platform
 import shutil
 import threading
 import unittest
@@ -7,6 +9,7 @@ from unittest import mock
 
 from cindral.agent import JobSpec
 from cindral.contract import CONTRACT_PATH
+from cindral.cache_adapters import architecture_name
 from cindral.executor import DockerExecutor, ProcessRunner, tail
 
 CONTRACT = """
@@ -53,12 +56,14 @@ def spec(job_id="job-1", sha="a" * 40):
 class FakeRunner:
     """Records argv, materializes the checkout on `git init`, and reads run.sh."""
 
-    def __init__(self, contract=CONTRACT, codes=None, cancel_on=None, health="healthy"):
+    def __init__(self, contract=CONTRACT, codes=None, cancel_on=None, health="healthy", files=None):
         self.calls = []
         self.contract = contract
         self.codes = codes or {}
         self.cancel_on = cancel_on
         self.health = health
+        self.files = files or {}
+        self.cache_was_present = False
         self.script = None
 
     def _workspace(self, argv):
@@ -78,6 +83,21 @@ class FakeRunner:
             repo = Path(argv[-1])
             (repo / ".cindral").mkdir(parents=True, exist_ok=True)
             (repo / CONTRACT_PATH).write_text(self.contract)
+            for name, value in self.files.items():
+                path = repo / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(value)
+        if "run.sh" in joined and "/cindral-cache" in joined:
+            cache_mount = next(
+                value
+                for index, value in enumerate(argv)
+                if index and argv[index - 1] == "-v" and value.endswith(":/cindral-cache")
+            )
+            cache_root = Path(cache_mount.rsplit(":", 1)[0])
+            store = cache_root / "pnpm"
+            self.cache_was_present = (store / "package.data").is_file()
+            store.mkdir(parents=True, exist_ok=True)
+            (store / "package.data").write_text("cached package")
         if self.cancel_on and self.cancel_on in joined and cancel is not None:
             cancel.set()
         for marker, code in self.codes.items():
@@ -106,6 +126,32 @@ def executor(runner, workspace, docker="docker"):
     )
 
 
+class FakeCacheClient:
+    def __init__(self):
+        self.entries = {}
+        self.blobs = {}
+        self.lookups = []
+        self.uploads = []
+
+    def lookup(self, repository, branch, architecture, key, restore_keys=()):
+        self.lookups.append((repository, branch, architecture, key, restore_keys))
+        return self.entries.get((repository, branch, architecture, key))
+
+    def download(self, digest, destination, repository, branch, architecture, key):
+        destination.write_bytes(self.blobs[digest])
+
+    def upload(self, repository, branch, architecture, key, source):
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        scope = (repository, branch, architecture, key)
+        self.uploads.append(scope)
+        if scope in self.entries:
+            return {"created": False, "entry": self.entries[scope]}
+        entry = {"repository": repository, "branch": branch, "architecture": architecture, "key": key, "digest": digest}
+        self.entries[scope] = entry
+        self.blobs[digest] = source.read_bytes()
+        return {"created": True, "entry": entry}
+
+
 class DockerExecutorTest(unittest.TestCase):
     def test_runs_the_contract_in_one_container(self) -> None:
         runner = FakeRunner()
@@ -126,6 +172,50 @@ class DockerExecutorTest(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             result = executor(runner, tmp)(spec(), threading.Event())
         self.assertEqual(result.exit_code, 3)
+
+    def test_restores_and_stores_a_pnpm_cache_using_lockfile_and_architecture(self) -> None:
+        runner = FakeRunner(files={"pnpm-lock.yaml": "lockfileVersion: '9.0'\n"})
+        cache = FakeCacheClient()
+        with TemporaryDirectory() as tmp:
+            result = DockerExecutor(
+                workspace_root=tmp,
+                log_dir=str(Path(tmp) / "logs"),
+                runner=runner,
+                cache_client=cache,
+            )(spec(), threading.Event())
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(len(cache.lookups), 1)
+        self.assertEqual(
+            cache.lookups[0][:3],
+            ("example-org/example-app", "main", architecture_name(platform.machine())),
+        )
+        self.assertEqual(len(cache.uploads), 1)
+        self.assertIn("cache miss pnpm", result.log)
+        self.assertIn("cache stored pnpm", result.log)
+        job_call = next(call for call in runner.calls if "run.sh" in " ".join(call))
+        self.assertIn("npm_config_store_dir=/cindral-cache/pnpm", job_call)
+        self.assertTrue(any(value.endswith(":/cindral-cache") for value in job_call))
+
+        second_runner = FakeRunner(files={"pnpm-lock.yaml": "lockfileVersion: '9.0'\n"})
+        with TemporaryDirectory() as tmp:
+            second_result = DockerExecutor(
+                workspace_root=tmp,
+                log_dir=str(Path(tmp) / "logs"),
+                runner=second_runner,
+                cache_client=cache,
+            )(spec(job_id="job-2"), threading.Event())
+        self.assertEqual(second_result.exit_code, 0)
+        self.assertTrue(second_runner.cache_was_present)
+        self.assertIn("cache hit pnpm", second_result.log)
+
+    def test_does_not_store_a_cache_after_a_failed_job(self) -> None:
+        runner = FakeRunner(codes={"pnpm run ci": 3}, files={"pnpm-lock.yaml": "lock"})
+        cache = FakeCacheClient()
+        with TemporaryDirectory() as tmp:
+            result = DockerExecutor(workspace_root=tmp, runner=runner, cache_client=cache)(spec(), threading.Event())
+        self.assertEqual(result.exit_code, 3)
+        self.assertEqual(cache.uploads, [])
 
     def test_retries_workspace_cleanup_in_a_root_container(self) -> None:
         runner = FakeRunner()
@@ -193,8 +283,8 @@ class DockerExecutorTest(unittest.TestCase):
             fake = Path(tmp) / "docker"
             fake.write_text("#!/bin/sh\n")
             fake.chmod(0o755)
-            with mock.patch("cindral.executor.DOCKER_SOCKET", str(socket)), mock.patch(
-                "cindral.executor.DOCKER_PLUGIN_DIRS", ()
+            with mock.patch("cindral.docker_support.DOCKER_SOCKET", str(socket)), mock.patch(
+                "cindral.docker_support.DOCKER_PLUGIN_DIRS", ()
             ):
                 result = executor(runner, tmp, docker=str(fake))(spec(), threading.Event())
         joined = [" ".join(call) for call in runner.calls]
@@ -202,6 +292,14 @@ class DockerExecutorTest(unittest.TestCase):
         self.assertTrue(any(f"-v {socket}:{socket}" in c for c in joined))
         self.assertTrue(any(f"-v {fake}:{fake}:ro" in c for c in joined))
         self.assertTrue(any("--group-add" in c for c in joined))
+
+    def test_missing_docker_socket_is_reported_as_executor_failure(self) -> None:
+        runner = FakeRunner(contract=DOCKER_CONTRACT)
+        with TemporaryDirectory() as tmp:
+            with mock.patch("cindral.docker_support.DOCKER_SOCKET", str(Path(tmp) / "missing.sock")):
+                result = executor(runner, tmp)(spec(), threading.Event())
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("docker but", result.log)
 
     def test_waits_for_a_service_health_check(self) -> None:
         contract = CONTRACT.replace("[image]", HEALTH_SERVICE + "\n[image]")

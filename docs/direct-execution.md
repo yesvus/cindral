@@ -82,6 +82,28 @@ CINDRAL_AGENT_TOKEN=... GITHUB_TOKEN=... \
 
 The agent needs Docker and permission to read the repositories it runs.
 
+## Dependency caches
+
+The agent automatically restores and writes tool caches when matching lockfiles
+are present. Cache keys include the lockfile digest and agent architecture;
+lookups stay within the exact repository and branch. A successful job creates
+an immutable entry, while a failed job never updates it. Cache restore or write
+errors are warnings and do not change the job result.
+
+Adapters cover pnpm and npm package stores, uv and pip download caches, Go
+module/build caches, and Next.js `.next/cache`. Cache archives are content
+addressed by SHA-256. Prefix restores only consider entries for the same
+repository, branch, and architecture.
+
+The broker stores cache blobs next to `CINDRAL_JOBS_DB` by default. Configure
+`CINDRAL_CACHE_DIR` to choose another persistent directory. Defaults are a
+30-day idle TTL, 256 MiB per repository, 768 MiB total storage, and 256 MiB per
+blob. Expired and least-recently-used entries are removed as cache requests
+arrive. Cache requests use the agent bearer token.
+
+BuildKit registry-layer caching remains configured by repository-owned Docker
+build workflows; the Cindral cache API does not proxy registry credentials.
+
 ## Broker configuration
 
 - `CINDRAL_JOBS_DB`: SQLite path; the queue stays off when unset.
@@ -91,6 +113,11 @@ The agent needs Docker and permission to read the repositories it runs.
 - `CINDRAL_JOB_TIMEOUT`: per-job timeout, default `3600`.
 - `CINDRAL_DIRECT_REPOSITORIES`: comma-separated `owner/name` list.
 - `CINDRAL_STATUS_CONTEXT`: commit status context, default `cindral/ci`.
+- `CINDRAL_CACHE_DIR`: persistent cache directory, defaults beside the jobs database.
+- `CINDRAL_CACHE_TTL_SECONDS`: idle TTL, default 30 days.
+- `CINDRAL_CACHE_REPOSITORY_QUOTA`: per-repository quota, default 256 MiB.
+- `CINDRAL_CACHE_STORAGE_QUOTA`: total cache quota, default 768 MiB.
+- `CINDRAL_CACHE_MAX_BLOB_BYTES`: largest archive, default 256 MiB.
 
 Leases are authoritative: a device holds a job until its lease expires, and an
 expired lease returns the job to the queue for another device.
@@ -100,7 +127,8 @@ expired lease returns the job to the queue for another device.
 | Endpoint | Auth | Content |
 | --- | --- | --- |
 | `GET /v1/pool` | `CINDRAL_POOL_TOKEN` | JSON pool snapshot: devices with their leases, queue depth, oldest pending age, expired lease count, reclaim total, recent jobs |
-| `GET /metrics` | none, same-origin only | Prometheus text for the same gauges |
+| `POST /v1/cache/lookup`, `PUT /v1/cache/entries`, `GET /v1/cache/blobs/{sha256}` | agent bearer token | scoped immutable cache lookup, upload, and blob restore |
+| `GET /metrics` | none, same-origin only | Prometheus pool, queue, and cache counters and gauges |
 
 `/v1/pool` answers cross-origin preflight for the panel. It takes the read-only
 pool token, not the agent token: a control panel that can read queue state
