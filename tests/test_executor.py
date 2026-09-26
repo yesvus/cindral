@@ -79,10 +79,11 @@ class FakeRunner:
         if workspace is not None and (workspace / "run.sh").exists():
             self.script = (workspace / "run.sh").read_text()
             joined += " " + self.script
-        if "git init" in " ".join(argv) and self.contract is not None:
+        if "git init" in " ".join(argv):
             repo = Path(argv[-1])
-            (repo / ".cindral").mkdir(parents=True, exist_ok=True)
-            (repo / CONTRACT_PATH).write_text(self.contract)
+            if self.contract is not None:
+                (repo / ".cindral").mkdir(parents=True, exist_ok=True)
+                (repo / CONTRACT_PATH).write_text(self.contract)
             for name, value in self.files.items():
                 path = repo / name
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -337,6 +338,23 @@ class DockerExecutorTest(unittest.TestCase):
         text = "x" * 100 + "END"
         self.assertTrue(tail(text, limit=10).endswith("END"))
         self.assertNotIn("x" * 100, tail(text, limit=10))
+
+    def test_executes_job_from_github_actions_workflow(self) -> None:
+        workflow_yaml = """
+name: CI
+on: [push]
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm test
+"""
+        runner = FakeRunner(contract=None, files={".github/workflows/ci.yml": workflow_yaml})
+        with TemporaryDirectory() as tmp:
+            result = executor(runner, tmp)(spec(), threading.Event())
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("npm test", runner.script)
 
 
 class ProcessRunnerTest(unittest.TestCase):
