@@ -1,3 +1,4 @@
+import shutil
 import threading
 import unittest
 from pathlib import Path
@@ -125,6 +126,51 @@ class DockerExecutorTest(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             result = executor(runner, tmp)(spec(), threading.Event())
         self.assertEqual(result.exit_code, 3)
+
+    def test_retries_workspace_cleanup_in_a_root_container(self) -> None:
+        runner = FakeRunner()
+        with TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "job-1"
+            original_rmtree = shutil.rmtree
+            failed = False
+
+            def fail_once(path, *args, **kwargs):
+                nonlocal failed
+                if Path(path) == workspace and workspace.exists() and not failed:
+                    failed = True
+                    raise PermissionError("root-owned files")
+                return original_rmtree(path, *args, **kwargs)
+
+            with mock.patch("cindral.executor.shutil.rmtree", side_effect=fail_once):
+                result = executor(runner, tmp)(spec(), threading.Event())
+
+            self.assertEqual(result.exit_code, 0)
+            self.assertFalse(workspace.exists())
+
+        cleanup_calls = [call for call in runner.calls if "--user" in call]
+        self.assertEqual(len(cleanup_calls), 1)
+        self.assertIn("0:0", cleanup_calls[0])
+        self.assertIn("node:22-bookworm", cleanup_calls[0])
+
+    def test_reports_workspace_cleanup_failure(self) -> None:
+        runner = FakeRunner(codes={"--user 0:0": 1})
+        with TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "job-1"
+            original_rmtree = shutil.rmtree
+            failed = False
+
+            def fail_once(path, *args, **kwargs):
+                nonlocal failed
+                if Path(path) == workspace and workspace.exists() and not failed:
+                    failed = True
+                    raise PermissionError("root-owned files")
+                return original_rmtree(path, *args, **kwargs)
+
+            with mock.patch("cindral.executor.shutil.rmtree", side_effect=fail_once):
+                result = executor(runner, tmp)(spec(), threading.Event())
+
+            self.assertEqual(result.exit_code, 0)
+            self.assertIn("warning: could not remove root-owned files", result.log)
 
     def test_starts_and_stops_declared_services(self) -> None:
         contract = CONTRACT.replace(
