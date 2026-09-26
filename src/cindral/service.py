@@ -44,6 +44,9 @@ class CindralServer(ThreadingHTTPServer):
     reservation_seconds: int
     jobs: JobStore | None = None
     agent_token: str | None = None
+    # read-only credential for /v1/pool, so a control panel can inspect the
+    # queue without holding the agent token that can claim and report jobs
+    pool_token: str | None = None
     lease_seconds: int = 300
     job_timeout: int = 3600
     direct_repositories: tuple[str, ...] = ()
@@ -567,6 +570,7 @@ def serve(policy_path: str | Path, state_path: str | Path, host: str, port: int,
     jobs_db = os.environ.get("CINDRAL_JOBS_DB")
     server.jobs = JobStore(jobs_db) if jobs_db else None
     server.agent_token = os.environ.get("CINDRAL_AGENT_TOKEN") or None
+    server.pool_token = os.environ.get("CINDRAL_POOL_TOKEN") or None
     server.lease_seconds = int(os.environ.get("CINDRAL_JOB_LEASE_SECONDS", "300"))
     server.job_timeout = int(os.environ.get("CINDRAL_JOB_TIMEOUT", "3600"))
     server.direct_repositories = tuple(
@@ -582,6 +586,8 @@ def serve(policy_path: str | Path, state_path: str | Path, host: str, port: int,
         print("warning: CINDRAL_DISPATCH_TOKEN is unset, /v1/dispatch will refuse every request")
     if server.jobs is not None and not server.agent_token:
         print("warning: CINDRAL_JOBS_DB is set but CINDRAL_AGENT_TOKEN is unset, /v1/jobs will refuse every request")
+    if server.jobs is not None and not server.pool_token:
+        print("warning: CINDRAL_JOBS_DB is set but CINDRAL_POOL_TOKEN is unset, /v1/pool will refuse every request")
     try:
         server.serve_forever()
     finally:

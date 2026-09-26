@@ -15,6 +15,7 @@ from cindral.webhook import sign
 
 SECRET = "webhook-secret"
 AGENT_TOKEN = "agent-token"
+POOL_TOKEN = "pool-token"
 REPO = "example-org/example-app"
 
 
@@ -60,6 +61,7 @@ class JobEndpointTest(unittest.TestCase):
         self.server.reservation_seconds = 10
         self.server.jobs = JobStore(str(Path(self._tmp.name) / "jobs.db"))
         self.server.agent_token = AGENT_TOKEN
+        self.server.pool_token = POOL_TOKEN
         self.server.direct_repositories = (REPO,)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -69,10 +71,10 @@ class JobEndpointTest(unittest.TestCase):
         self.server.shutdown()
         self.server.server_close()
 
-    def call(self, method, path, body=None, headers=None, authorize=True):
+    def call(self, method, path, body=None, headers=None, authorize=True, token=None):
         merged = {"Content-Type": "application/json"}
         if authorize:
-            merged["Authorization"] = f"Bearer {AGENT_TOKEN}"
+            merged["Authorization"] = f"Bearer {token or AGENT_TOKEN}"
         merged.update(headers or {})
         payload = json.dumps(body).encode() if body is not None else None
         connection = HTTPConnection("127.0.0.1", self.port, timeout=10)
@@ -282,13 +284,26 @@ class JobEndpointTest(unittest.TestCase):
         status, _ = self.call("GET", "/v1/pool", authorize=False)
         self.assertEqual(status, 401)
 
+    def test_pool_snapshot_accepts_the_read_only_token(self) -> None:
+        status, payload = self.call("GET", "/v1/pool", token=POOL_TOKEN)
+        self.assertEqual(status, 200)
+        self.assertIn("queue_depth", payload)
+
+    def test_pool_snapshot_refuses_the_agent_token(self) -> None:
+        # the agent token can claim and report jobs, so it must not be the
+        # credential a read-only consumer holds
+        status, _ = self.call("GET", "/v1/pool", token=AGENT_TOKEN)
+        self.assertEqual(status, 401)
+
     def test_pool_snapshot_refuses_the_dispatch_token(self) -> None:
-        # the dispatch credential is narrower than the agent one, so it must
-        # not widen into pool visibility
         self.server.dispatch_token = "dispatch-token"
-        status, _ = self.call(
-            "GET", "/v1/pool", headers={"Authorization": "Bearer dispatch-token"}, authorize=False
-        )
+        status, _ = self.call("GET", "/v1/pool", token="dispatch-token")
+        self.assertEqual(status, 401)
+
+    def test_pool_snapshot_is_refused_without_a_configured_token(self) -> None:
+        # an unset secret must not silently expose the snapshot
+        self.server.pool_token = None
+        status, _ = self.call("GET", "/v1/pool", token=POOL_TOKEN)
         self.assertEqual(status, 401)
 
     def test_metrics_is_not_readable_cross_origin(self) -> None:
@@ -318,7 +333,7 @@ class JobEndpointTest(unittest.TestCase):
     def test_pool_snapshot_returns_pool_state(self) -> None:
         job = self.server.jobs.enqueue("example-org/app", "sha1", "main", command=("ci",))
         self.server.jobs.claim("server", ["self-hosted", "Linux", "ARM64", "server", "fallback"])
-        status, payload = self.call("GET", "/v1/pool", authorize=True)
+        status, payload = self.call("GET", "/v1/pool", token=POOL_TOKEN)
         self.assertEqual(status, 200)
         self.assertIn("devices", payload)
         self.assertIn("queue_depth", payload)
