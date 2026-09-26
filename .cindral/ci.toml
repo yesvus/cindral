@@ -9,6 +9,9 @@ docker = true
 run = "pip install --quiet -e ."
 
 [[steps]]
+run = "python scripts/check_file_limits.py"
+
+[[steps]]
 run = "python -m compileall -q src"
 
 [[steps]]

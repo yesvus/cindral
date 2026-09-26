@@ -152,21 +152,20 @@ class CindralHandler(BaseHTTPRequestHandler):
         inputs: dict[str, str],
         reservation: tuple[str, int] | None,
     ) -> bool:
-        dispatched = False
         try:
             self.server.github.dispatch(repository, workflow, ref, inputs)
-            dispatched = True
+            return True
         except GitHubDispatchError as exc:
-            self._send(502, {"error": str(exc)})
-            return False
+            err = str(exc)
         except Exception as exc:
             self.log_error("unexpected GitHub dispatch failure: %s", exc)
-            self._send(502, {"error": "GitHub dispatch failed"})
-            return False
+            err = "GitHub dispatch failed"
+
+        try:
+            self._release_reservation(reservation)
         finally:
-            if not dispatched:
-                self._release_reservation(reservation)
-        return True
+            self._send(502, {"error": err})
+        return False
 
     def _dispatch_decision(
         self,
