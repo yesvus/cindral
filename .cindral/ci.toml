@@ -31,10 +31,25 @@ run = "docker run --rm -v \"$PWD/web:/app\" -w /app node:22-bookworm sh -lc 'cor
 run = "docker build -t cindral-panel:ci web"
 
 [[steps]]
-run = "docker run -d --name cindral-panel-ci -e CINDRAL_PANEL_EMAIL=ci@example.com -e CINDRAL_PANEL_PASSWORD=ci -e CINDRAL_SESSION_SECRET=ci-secret cindral-panel:ci"
+run = "docker network create cindral-panel-ci-net"
+
+# A stub broker that returns a real snapshot. The signed-in pages only build
+# their tables when the snapshot has devices and jobs, so pointing the panel at
+# a dead broker would pass even with a broken page.
+[[steps]]
+run = "docker run -d --name cindral-panel-ci-broker --network cindral-panel-ci-net --network-alias broker node:22-bookworm node -e \"require('http').createServer((q,s)=>{s.setHeader('content-type','application/json');s.end(JSON.stringify({devices:[{name:'ci-device',status:'online',healthy:true,busy:false,labels:['linux'],current_lease:null,leases:[]}],queue_depth:{pending:1,running:0,success:2,failure:0},expired_lease_count:0,oldest_pending_age_seconds:5,reclaim_count:0,success_count:2,failure_count:0,recent_jobs:[{id:'a'.repeat(32),repository:'org/app',sha:'b'.repeat(40),ref:'main',command:['ci'],labels:[],timeout:60,status:'success',device:'ci-device',exit_code:0,attempts:1,status_sha:null,log:'ok'}]}))}).listen(8095)\""
 
 [[steps]]
-run = "sleep 4 && docker exec cindral-panel-ci node -e \"fetch('http://127.0.0.1:3000/login').then(function(r){console.log('login',r.status);process.exit(r.ok?0:1)}).catch(function(e){console.error(e.message);process.exit(1)})\" && docker rm -f cindral-panel-ci"
+run = "docker run -d --name cindral-panel-ci --network cindral-panel-ci-net -e CINDRAL_PANEL_EMAIL=ci@example.com -e CINDRAL_PANEL_PASSWORD=ci -e CINDRAL_SESSION_SECRET=ci-secret -e CINDRAL_POOL_TOKEN=ci-pool -e CINDRAL_API_URL=http://broker:8095 cindral-panel:ci"
+
+[[steps]]
+run = "sleep 4 && docker exec cindral-panel-ci node -e \"var s=Buffer.from(JSON.stringify({email:'ci@example.com',expires:Math.floor(Date.now()/1000)+600})).toString('base64url');var sig=require('crypto').createHmac('sha256','ci-secret').update(s).digest('base64url');var pages=['/','/devices','/jobs'];Promise.all(pages.map(function(p){return fetch('http://127.0.0.1:3000'+p,{redirect:'manual',headers:{cookie:'cindral_session='+s+'.'+sig}}).then(function(r){console.log(p,r.status);return r.status===200})})).then(function(ok){process.exit(ok.every(Boolean)?0:1)}).catch(function(e){console.error(e.message);process.exit(1)})\""
+
+[[steps]]
+run = "docker logs cindral-panel-ci 2>&1 | grep -q 'Functions cannot be passed' && echo 'panel pages failed to render' && exit 1 || true"
+
+[[steps]]
+run = "docker rm -f cindral-panel-ci cindral-panel-ci-broker && docker network rm cindral-panel-ci-net"
 
 # Unit tests run against an editable install, so they cannot detect a
 # dependency the Dockerfile forgets to install. That only surfaces when the
