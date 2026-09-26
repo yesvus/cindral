@@ -190,7 +190,10 @@ def event_matches(
             if has_tag_filter and not has_branch_filter:
                 return False
             if event_name == "pull_request":
-                target = base_ref or (clean_ref if not branch_or_tag.startswith("refs/pull/") else "main")
+                is_pr_ref = branch_or_tag.startswith("refs/pull/") or branch_or_tag.startswith("pull/")
+                if is_pr_ref and base_ref is None:
+                    return True
+                target = base_ref if base_ref is not None else clean_ref
                 branches = _patterns(config.get("branches"))
                 branches_ignore = _patterns(config.get("branches-ignore"))
                 if branches is not None and not any(fnmatch.fnmatch(target, p) for p in branches):
@@ -222,7 +225,13 @@ def resolve_workflow_job(repo: Path, job: JobSpec) -> tuple[Workflow, WorkflowJo
         if not event_matches(wf.on, event_name, job.ref):
             continue
         for j_id, j in wf.jobs.items():
-            if target_job is None or target_job in {j_id, j.name, wf.path.name}:
+            matches_target = (
+                target_job is None
+                or target_job in {j_id, j.name}
+                or target_job == f"{wf.path.name}:{j_id}"
+                or (target_job == wf.path.name and len(wf.jobs) == 1)
+            )
+            if matches_target:
                 matching.append((wf, j))
 
     if not matching:
@@ -231,12 +240,13 @@ def resolve_workflow_job(repo: Path, job: JobSpec) -> tuple[Workflow, WorkflowJo
             f"no workflow job matched event '{event_name}' on ref '{job.ref}'{target_clause}"
         )
 
-    if len(matching) > 1 and target_job is None:
-        preferred = [m for m in matching if m[1].id in {"ci", "test"} or m[1].name.lower() in {"ci", "test"}]
-        if len(preferred) == 1:
-            return preferred[0]
+    if len(matching) > 1:
+        if target_job is None:
+            preferred = [m for m in matching if m[1].id in {"ci", "test"} or m[1].name.lower() in {"ci", "test"}]
+            if len(preferred) == 1:
+                return preferred[0]
         job_list = ", ".join(f"{wf.path.name}:{j.id}" for wf, j in matching)
-        raise WorkflowError(f"multiple workflow jobs matched ({job_list}); specify target job in command")
+        raise WorkflowError(f"multiple workflow jobs matched ({job_list}); specify an unambiguous target job")
 
     return matching[0]
 

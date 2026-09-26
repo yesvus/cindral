@@ -92,6 +92,7 @@ jobs:
         self.assertFalse(event_matches(on_spec, "push", "refs/heads/bugfix/123"))
         self.assertFalse(event_matches(on_spec, "push", "refs/heads/other/merge"))
         self.assertTrue(event_matches(on_spec, "pull_request", "refs/pull/42/merge"))
+        self.assertTrue(event_matches(on_spec, "pull_request", "pull/42/head"))
         self.assertFalse(event_matches(on_spec, "pull_request", "refs/pull/42/merge", base_ref="release"))
         self.assertTrue(event_matches(on_spec, "workflow_dispatch", "refs/heads/main"))
         self.assertFalse(event_matches(on_spec, "schedule", "refs/heads/main"))
@@ -217,6 +218,34 @@ jobs:
         job = JobSpec("job1", "org/repo", "sha123", "refs/heads/main", (), 60)
         with self.assertRaises(WorkflowError):
             resolve_workflow_contract(empty_repo, job)
+
+    def test_ambiguous_target_job_raises_error(self) -> None:
+        (self.workflows_dir / "first.yml").write_text(
+            """
+name: First
+on: [push]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 1
+"""
+        )
+        (self.workflows_dir / "second.yml").write_text(
+            """
+name: Second
+on: [push]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 2
+"""
+        )
+        job = JobSpec("job1", "org/repo", "sha123", "refs/heads/main", ("lint",), 60)
+        with self.assertRaises(WorkflowError) as cm:
+            resolve_workflow_job(self.repo, job)
+        self.assertIn("multiple workflow jobs matched", str(cm.exception))
 
     def test_create_event_payload_synthesizes_push_and_pull_request_events(self) -> None:
         push_job = JobSpec("job1", "my-org/my-app", "abc1234", "refs/heads/main", (), 60)
