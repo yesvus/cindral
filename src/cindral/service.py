@@ -11,6 +11,7 @@ import threading
 import time
 from typing import Any
 
+from .cache import CACHE_REPOSITORY_QUOTA, CACHE_STORAGE_QUOTA, CACHE_TTL_SECONDS, MAX_CACHE_BLOB_BYTES, CacheStore
 from .github import GitHubAPIError, GitHubClient, GitHubDispatchError, RepositoryRunner, is_repository_slug
 from .jobapi import JobApiMixin
 from .jobs import JobStore
@@ -43,6 +44,7 @@ class CindralServer(ThreadingHTTPServer):
     runner_reservations: dict[str, dict[int, tuple[float, tuple[str, ...]]]]
     reservation_seconds: int
     jobs: JobStore | None = None
+    cache: CacheStore | None = None
     agent_token: str | None = None
     # read-only credential for /v1/pool, so a control panel can inspect the
     # queue without holding the agent token that can claim and report jobs
@@ -69,6 +71,9 @@ class CindralHandler(JobApiMixin, ObservabilityMixin, BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0].startswith("/v1/jobs/"):
             self._jobs()
             return
+        if self.path.split("?", 1)[0].startswith("/v1/cache/"):
+            self._cache()
+            return
         self._send(404, {"error": "not found"})
 
     def do_POST(self) -> None:
@@ -77,6 +82,9 @@ class CindralHandler(JobApiMixin, ObservabilityMixin, BaseHTTPRequestHandler):
             return
         if self.path.split("?", 1)[0].startswith("/v1/jobs"):
             self._jobs()
+            return
+        if self.path.split("?", 1)[0].startswith("/v1/cache/"):
+            self._cache()
             return
         if self.path not in {"/v1/route", "/v1/dispatch"}:
             self._send(404, {"error": "not found"})
@@ -132,6 +140,12 @@ class CindralHandler(JobApiMixin, ObservabilityMixin, BaseHTTPRequestHandler):
             self._send(409, {"error": str(exc)})
             return
         self._dispatch(repository, workflow, ref, inputs, request, decision, reservation)
+
+    def do_PUT(self) -> None:
+        if self.path.split("?", 1)[0].startswith("/v1/cache/"):
+            self._cache()
+            return
+        self._send(404, {"error": "not found"})
 
     def _dispatch(
         self,
@@ -576,6 +590,14 @@ def serve(policy_path: str | Path, state_path: str | Path, host: str, port: int,
         # sharing a value would hand the read-only consumer the write capability
         raise ValueError(
             "CINDRAL_POOL_TOKEN must differ from CINDRAL_AGENT_TOKEN and CINDRAL_DISPATCH_TOKEN"
+        )
+    if jobs_db:
+        server.cache = CacheStore(
+            os.environ.get("CINDRAL_CACHE_DIR") or str(Path(jobs_db).parent / "cache"),
+            ttl_seconds=int(os.environ.get("CINDRAL_CACHE_TTL_SECONDS", str(CACHE_TTL_SECONDS))),
+            repository_quota=int(os.environ.get("CINDRAL_CACHE_REPOSITORY_QUOTA", str(CACHE_REPOSITORY_QUOTA))),
+            storage_quota=int(os.environ.get("CINDRAL_CACHE_STORAGE_QUOTA", str(CACHE_STORAGE_QUOTA))),
+            max_blob_bytes=int(os.environ.get("CINDRAL_CACHE_MAX_BLOB_BYTES", str(MAX_CACHE_BLOB_BYTES))),
         )
     server.lease_seconds = int(os.environ.get("CINDRAL_JOB_LEASE_SECONDS", "300"))
     server.job_timeout = int(os.environ.get("CINDRAL_JOB_TIMEOUT", "3600"))

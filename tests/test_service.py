@@ -8,6 +8,8 @@ from unittest.mock import patch
 
 from cindral import jobs
 from cindral.github import RepositoryRunner
+from cindral.cache import CacheStore
+from cindral.cache_client import CindralCacheClient
 from cindral.jobs import JobStore
 from cindral.policy import Policy
 from cindral.service import WEBHOOK_PATH, CindralHandler, CindralServer
@@ -61,6 +63,7 @@ class JobEndpointTest(unittest.TestCase):
         self.server.runner_reservations = {}
         self.server.reservation_seconds = 10
         self.server.jobs = JobStore(str(Path(self._tmp.name) / "jobs.db"))
+        self.server.cache = CacheStore(Path(self._tmp.name) / "cache")
         self.server.agent_token = AGENT_TOKEN
         self.server.pool_token = POOL_TOKEN
         self.server.direct_repositories = (REPO,)
@@ -392,6 +395,29 @@ class JobEndpointTest(unittest.TestCase):
         self.assertIn('cindral_queue_depth{state="pending"} 1', raw)
         self.assertIn('cindral_devices{status="online"}', raw)
         self.assertIn("cindral_oldest_pending_seconds", raw)
+        self.assertIn("cindral_cache_hit_ratio", raw)
+
+    def test_cache_api_round_trip_uses_agent_token_and_content_digest(self) -> None:
+        client = CindralCacheClient(f"http://127.0.0.1:{self.port}", AGENT_TOKEN)
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "cache.tar.gz"
+            archive.write_bytes(b"cache contents")
+            uploaded = client.upload(REPO, "main", "arm64", "pnpm-arm64-lock", archive)
+            self.assertTrue(uploaded["created"])
+            entry = client.lookup(REPO, "main", "arm64", "pnpm-arm64-lock")
+            self.assertEqual(entry["digest"], uploaded["entry"]["digest"])
+            destination = Path(tmp) / "restored.tar.gz"
+            client.download(entry["digest"], destination)
+            self.assertEqual(destination.read_bytes(), b"cache contents")
+
+    def test_cache_lookup_requires_the_agent_token(self) -> None:
+        status, _ = self.call(
+            "POST",
+            "/v1/cache/lookup",
+            {"repository": REPO, "branch": "main", "architecture": "arm64", "key": "key"},
+            authorize=False,
+        )
+        self.assertEqual(status, 401)
 
     def test_pool_preflight_allows_the_bearer_header(self) -> None:
         connection = HTTPConnection("127.0.0.1", self.port, timeout=10)

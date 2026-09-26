@@ -20,6 +20,10 @@ The policy engine is deterministic, takes runner state as data, and never execut
 
 **Direct execution** - a repository declares its CI in a committed [`.cindral/ci.toml`](docs/direct-execution.md). Cindral queues the job, a device agent runs it in bounded Docker, and the result is reported as a `cindral/ci` commit status. Default-branch pushes and trusted same-repository pull requests take this path; fork and untrusted pull requests stay on the hosted lane.
 
+Direct jobs automatically use branch- and architecture-scoped dependency caches
+for supported package and build tools. See [direct execution](docs/direct-execution.md)
+for cache adapters, quotas, and broker settings.
+
 ## Service
 
 `GET /healthz`, `POST /v1/route`, `POST /v1/dispatch`. A routing request carries a lane, target, visibility, quota status, and time estimate; the response carries the chosen lane, runner labels, and the reason.

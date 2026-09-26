@@ -7,6 +7,7 @@ import socket
 import sys
 
 from .agent import Agent, CindralClient
+from .cache_client import CindralCacheClient
 from .executor import DockerExecutor
 from .github import GitHubAPIError, GitHubClient, is_repository_slug
 from .models import RouteRequest
@@ -68,6 +69,7 @@ def main() -> None:
             workspace_root=args.workspace,
             log_dir=args.log_dir or None,
             docker=args.docker,
+            cache_client=CindralCacheClient(args.url, token),
         )
         runner = Agent(
             CindralClient(args.url, token),
