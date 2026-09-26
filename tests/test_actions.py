@@ -64,6 +64,23 @@ jobs:
         self.assertEqual(job.services[0].name, "redis")
         self.assertEqual(job.services[0].image, "redis:7")
 
+    def test_invalid_timeout_minutes_raises_error(self) -> None:
+        workflow_file = self.workflows_dir / "bad-timeout.yml"
+        workflow_file.write_text(
+            """
+name: Bad Timeout
+on: [push]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: -5
+    steps:
+      - run: echo hi
+"""
+        )
+        with self.assertRaises(WorkflowError):
+            parse_workflow(workflow_file)
+
     def test_event_matching_for_push_and_pull_request(self) -> None:
         on_spec = {
             "push": {"branches": ["main", "feature/*"]},
@@ -73,9 +90,53 @@ jobs:
         self.assertTrue(event_matches(on_spec, "push", "refs/heads/main"))
         self.assertTrue(event_matches(on_spec, "push", "refs/heads/feature/auth"))
         self.assertFalse(event_matches(on_spec, "push", "refs/heads/bugfix/123"))
+        self.assertFalse(event_matches(on_spec, "push", "refs/heads/other/merge"))
         self.assertTrue(event_matches(on_spec, "pull_request", "refs/pull/42/merge"))
         self.assertTrue(event_matches(on_spec, "workflow_dispatch", "refs/heads/main"))
         self.assertFalse(event_matches(on_spec, "schedule", "refs/heads/main"))
+
+    def test_tag_filtering_and_tag_only_workflows(self) -> None:
+        tag_spec = {"push": {"tags": ["v*"]}}
+        self.assertTrue(event_matches(tag_spec, "push", "refs/tags/v1.0.0"))
+        self.assertFalse(event_matches(tag_spec, "push", "refs/tags/release-1.0"))
+        self.assertFalse(event_matches(tag_spec, "push", "refs/heads/main"))
+
+    def test_workflow_to_contract_rejects_unsupported_runs_on(self) -> None:
+        workflow_file = self.workflows_dir / "windows.yml"
+        workflow_file.write_text(
+            """
+name: Windows
+on: [push]
+jobs:
+  win:
+    runs-on: windows-latest
+    steps:
+      - run: echo hello
+"""
+        )
+        wf = parse_workflow(workflow_file)
+        with self.assertRaises(WorkflowError) as cm:
+            workflow_to_contract(wf.jobs["win"])
+        self.assertIn("unsupported runs-on", str(cm.exception))
+
+    def test_workflow_to_contract_rejects_step_if_condition(self) -> None:
+        workflow_file = self.workflows_dir / "step-if.yml"
+        workflow_file.write_text(
+            """
+name: Step If
+on: [push]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 1
+        if: failure()
+"""
+        )
+        wf = parse_workflow(workflow_file)
+        with self.assertRaises(WorkflowError) as cm:
+            workflow_to_contract(wf.jobs["test"])
+        self.assertIn("uses unsupported 'if' condition", str(cm.exception))
 
     def test_workflow_to_contract_translation(self) -> None:
         workflow_file = self.workflows_dir / "build.yaml"
@@ -156,6 +217,10 @@ jobs:
         self.assertEqual(pr_payload["action"], "opened")
         self.assertIn("pull_request", pr_payload)
         self.assertEqual(pr_payload["pull_request"]["number"], 42)
+
+        pr_head_job = JobSpec("job3", "my-org/my-app", "def5678", "refs/pull/99/head", (), 60)
+        pr_head_payload = create_event_payload(pr_head_job, "pull_request")
+        self.assertEqual(pr_head_payload["pull_request"]["number"], 99)
 
     def test_build_act_command_constructs_flags_and_mappings(self) -> None:
         cmd = build_act_command(

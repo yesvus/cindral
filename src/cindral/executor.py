@@ -305,6 +305,9 @@ class DockerExecutor:
         services: list[str] = []
         unhealthy: list[tuple[str, Service]] = []
         self.runner.check([self.docker, "network", "create", network], log, cancel=cancel)
+        timer = threading.Timer(contract.timeout_minutes * 60, cancel.set) if contract.timeout_minutes else None
+        if timer:
+            timer.start()
         try:
             for service in contract.services:
                 name = f"{network}-{service.name}"
@@ -349,14 +352,14 @@ class DockerExecutor:
             ]
             if cache_root is not None:
                 argv += ["-v", f"{cache_root}:/cindral-cache"]
-            for key, value in contract.env.items():
-                argv += ["-e", f"{key}={value}"]
-            for key, value in (cache_environment or {}).items():
+            for key, value in {**contract.env, **(cache_environment or {})}.items():
                 argv += ["-e", f"{key}={value}"]
             argv += [image, self.shell, "-lc", "sh /workspace/run.sh"]
             code = self.runner.run(argv, log, cancel=cancel)
             return 130 if cancel.is_set() else code
         finally:
+            if timer:
+                timer.cancel()
             for name in services:
                 self.runner.run([self.docker, "rm", "-f", name], log)
             self.runner.run([self.docker, "network", "rm", network], log)

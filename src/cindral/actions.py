@@ -103,8 +103,22 @@ def parse_workflow(path: Path) -> Workflow:
                 if isinstance(step, dict):
                     steps.append(step)
 
-        timeout = raw_job.get("timeout-minutes")
-        timeout_minutes = int(timeout) if isinstance(timeout, (int, str)) and str(timeout).isdigit() else None
+        if "if" in raw_job and raw_job["if"] not in (True, "true", "always()", None):
+            raise WorkflowError(f"job '{job_id}' uses unsupported 'if' condition (requires act engine)")
+
+        raw_timeout = raw_job.get("timeout-minutes")
+        if raw_timeout is not None:
+            if isinstance(raw_timeout, bool) or not isinstance(raw_timeout, (int, str)):
+                raise WorkflowError(f"job '{job_id}' timeout-minutes must be a positive integer")
+            try:
+                timeout_val = int(raw_timeout)
+                if timeout_val <= 0:
+                    raise ValueError
+            except ValueError:
+                raise WorkflowError(f"job '{job_id}' timeout-minutes must be a positive integer")
+            timeout_minutes: int | None = timeout_val
+        else:
+            timeout_minutes = None
 
         jobs[job_id] = WorkflowJob(
             id=job_id,
@@ -142,12 +156,41 @@ def event_matches(on_spec: Any, event_name: str, branch_or_tag: str) -> bool:
         if config is None:
             return True
         if isinstance(config, dict):
-            branches = config.get("branches", [])
-            if isinstance(branches, list) and branches:
-                clean_branch = branch_or_tag.removeprefix("refs/heads/").removeprefix("refs/pull/")
-                if clean_branch.endswith("/merge"):
+            is_tag = branch_or_tag.startswith("refs/tags/")
+            clean_ref = (
+                branch_or_tag.removeprefix("refs/tags/")
+                if is_tag
+                else branch_or_tag.removeprefix("refs/heads/")
+            )
+            if is_tag:
+                tags = config.get("tags")
+                tags_ignore = config.get("tags-ignore")
+                if tags is not None and isinstance(tags, list):
+                    return any(fnmatch.fnmatch(clean_ref, p) for p in tags)
+                if tags_ignore is not None and isinstance(tags_ignore, list):
+                    return not any(fnmatch.fnmatch(clean_ref, p) for p in tags_ignore)
+                if "tags" in config or "tags-ignore" in config:
+                    return False
+                if "branches" in config or "branches-ignore" in config:
+                    return False
+                return True
+            if event_name == "pull_request":
+                if branch_or_tag.startswith("refs/pull/") or branch_or_tag.startswith("pull/"):
                     return True
-                return any(fnmatch.fnmatch(clean_branch, pattern) for pattern in branches)
+                branches = config.get("branches")
+                if branches is not None and isinstance(branches, list):
+                    return any(fnmatch.fnmatch(clean_ref, p) for p in branches)
+                return True
+            branches = config.get("branches")
+            branches_ignore = config.get("branches-ignore")
+            if branches is not None and isinstance(branches, list):
+                if not any(fnmatch.fnmatch(clean_ref, p) for p in branches):
+                    return False
+            if branches_ignore is not None and isinstance(branches_ignore, list):
+                if any(fnmatch.fnmatch(clean_ref, p) for p in branches_ignore):
+                    return False
+            if "tags" in config and not is_tag and "branches" not in config and "branches-ignore" not in config:
+                return False
         return True
     return False
 
@@ -157,7 +200,8 @@ def resolve_workflow_job(repo: Path, job: JobSpec) -> tuple[Workflow, WorkflowJo
     if not workflows:
         raise WorkflowError("repository has no .cindral/ci.toml and no .github/workflows/*.{yml,yaml}")
 
-    event_name = "pull_request" if "pull" in job.ref else "push"
+    is_pr = job.ref.startswith("refs/pull/") or job.ref.startswith("pull/")
+    event_name = "pull_request" if is_pr else "push"
     target_job = job.command[0] if job.command else None
 
     matching: list[tuple[Workflow, WorkflowJob]] = []
@@ -174,30 +218,44 @@ def resolve_workflow_job(repo: Path, job: JobSpec) -> tuple[Workflow, WorkflowJo
             f"no workflow job matched event '{event_name}' on ref '{job.ref}'{target_clause}"
         )
 
+    if len(matching) > 1 and target_job is None:
+        preferred = [m for m in matching if m[1].id in {"ci", "test"} or m[1].name.lower() in {"ci", "test"}]
+        if len(preferred) == 1:
+            return preferred[0]
+        job_list = ", ".join(f"{wf.path.name}:{j.id}" for wf, j in matching)
+        raise WorkflowError(f"multiple workflow jobs matched ({job_list}); specify target job in command")
+
     return matching[0]
 
 
 def workflow_to_contract(job: WorkflowJob) -> Contract:
     steps: list[str] = []
     for step in job.steps:
+        if "if" in step and step["if"] not in (True, "true", "always()", None):
+            raise WorkflowError(f"step uses unsupported 'if' condition (requires act engine)")
+        if "working-directory" in step:
+            raise WorkflowError(f"step uses unsupported 'working-directory' (requires act engine)")
         if "run" in step:
             run_cmd = str(step["run"]).strip()
             if run_cmd:
                 steps.append(run_cmd)
         elif "uses" in step:
             action = str(step["uses"]).strip()
-            if action.startswith("actions/checkout"):
+            action_repo = action.split("@")[0]
+            if action_repo == "actions/checkout":
                 continue
             raise WorkflowError(f"step uses unsupported action '{action}' (requires act engine)")
 
     if not steps:
         raise WorkflowError(f"job '{job.id}' has no executable steps")
 
-    image = DEFAULT_RUNNER_IMAGE
+    image = None
     for label in job.runs_on:
         if label in IMAGE_MAP:
             image = IMAGE_MAP[label]
             break
+    if image is None:
+        raise WorkflowError(f"job '{job.id}' specifies unsupported runs-on '{job.runs_on}'")
 
     return Contract(
         steps=tuple(steps),
@@ -217,8 +275,14 @@ def create_event_payload(job: JobSpec, event_name: str) -> dict[str, Any]:
     repo_parts = job.repository.split("/", 1)
     owner = repo_parts[0] if len(repo_parts) > 1 else ""
     name = repo_parts[1] if len(repo_parts) > 1 else job.repository
-    branch = job.ref.removeprefix("refs/heads/").removeprefix("refs/pull/")
-    pr_number = branch.split("/")[0] if branch.endswith("/merge") else "1"
+    is_pr = job.ref.startswith("refs/pull/") or job.ref.startswith("pull/")
+    clean_branch = job.ref.removeprefix("refs/heads/")
+    pr_number = 1
+    if is_pr:
+        clean_pr = job.ref.removeprefix("refs/pull/").removeprefix("pull/")
+        parts = clean_pr.split("/")
+        if parts and parts[0].isdigit():
+            pr_number = int(parts[0])
 
     payload: dict[str, Any] = {
         "repository": {
@@ -231,10 +295,11 @@ def create_event_payload(job: JobSpec, event_name: str) -> dict[str, Any]:
         "sha": job.sha,
         "action": "opened" if event_name == "pull_request" else None,
     }
-    if event_name == "pull_request":
+    if event_name == "pull_request" or is_pr:
+        payload["action"] = "opened"
         payload["pull_request"] = {
-            "number": int(pr_number) if pr_number.isdigit() else 1,
-            "head": {"sha": job.sha, "ref": branch},
+            "number": pr_number,
+            "head": {"sha": job.sha, "ref": clean_branch},
             "base": {"ref": "main"},
         }
     return payload
