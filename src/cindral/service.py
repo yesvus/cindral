@@ -51,9 +51,22 @@ class CindralServer(ThreadingHTTPServer):
 class CindralHandler(BaseHTTPRequestHandler):
     server: CindralServer
 
+    def do_OPTIONS(self) -> None:
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.end_headers()
+
     def do_GET(self) -> None:
         if self.path == "/healthz":
             self._send(200, {"status": "ok"})
+            return
+        if self.path == "/metrics":
+            self._metrics()
+            return
+        if self.path.split("?", 1)[0] == "/v1/pool":
+            self._pool()
             return
         if self.path.split("?", 1)[0].startswith("/v1/jobs/"):
             self._jobs()
@@ -296,6 +309,9 @@ class CindralHandler(BaseHTTPRequestHandler):
         if not header.startswith(prefix):
             return False
         return hmac.compare_digest(header[len(prefix):].strip(), expected)
+
+    def _is_authorized(self) -> bool:
+        return self._agent_authorized() or self._dispatch_authorized()
 
     def _read_json(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0") or 0)
@@ -619,21 +635,93 @@ class CindralHandler(BaseHTTPRequestHandler):
             },
         )
 
+    def _pool(self) -> None:
+        store = self.server.jobs
+        if store is None:
+            self._send(503, {"error": "job queue is not configured"})
+            return
+        if not self._is_authorized():
+            self._send(401, {"error": "pool snapshot requires a bearer token"})
+            return
+        snapshot = store.pool_snapshot(self.server.runners)
+        self._send(200, snapshot)
+
+    def _metrics(self) -> None:
+        metrics_text = render_metrics(self.server.runners, self.server.jobs)
+        self._send_text(200, metrics_text)
+
     def log_message(self, format: str, *args: object) -> None:
         return
 
     def _send(self, status: int, payload: dict[str, Any] | None = None) -> None:
         if payload is None:
             self.send_response(status)
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
         body = json.dumps(payload).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_text(self, status: int, text: str, content_type: str = "text/plain; version=0.0.4; charset=utf-8") -> None:
+        body = text.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def render_metrics(runners: Iterable[Any], store: JobStore | None) -> str:
+    lines: list[str] = []
+
+    online_count = sum(1 for r in runners if getattr(r, "status", None) == "online")
+    offline_count = sum(1 for r in runners if getattr(r, "status", None) != "online")
+
+    lines.extend([
+        "# HELP cindral_devices Total configured runner devices by status.",
+        "# TYPE cindral_devices gauge",
+        f'cindral_devices{{status="online"}} {online_count}',
+        f'cindral_devices{{status="offline"}} {offline_count}',
+        "",
+    ])
+
+    if store is None:
+        return "\n".join(lines) + "\n"
+
+    snapshot = store.pool_snapshot(runners)
+    queue = snapshot["queue_depth"]
+    busy_count = sum(1 for d in snapshot["devices"] if d.get("busy"))
+
+    lines.extend([
+        "# HELP cindral_queue_depth Number of jobs in the queue by state.",
+        "# TYPE cindral_queue_depth gauge",
+        f'cindral_queue_depth{{state="pending"}} {queue.get("pending", 0)}',
+        f'cindral_queue_depth{{state="running"}} {queue.get("running", 0)}',
+        f'cindral_queue_depth{{state="success"}} {queue.get("success", 0)}',
+        f'cindral_queue_depth{{state="failure"}} {queue.get("failure", 0)}',
+        "",
+        "# HELP cindral_oldest_pending_seconds Age in seconds of the oldest pending job.",
+        "# TYPE cindral_oldest_pending_seconds gauge",
+        f'cindral_oldest_pending_seconds {snapshot["oldest_pending_age_seconds"]}',
+        "",
+        "# HELP cindral_reclaims_total Total number of expired leases reclaimed.",
+        "# TYPE cindral_reclaims_total counter",
+        f'cindral_reclaims_total {snapshot["reclaim_count"]}',
+        "",
+        "# HELP cindral_devices_busy Number of devices currently executing a lease.",
+        "# TYPE cindral_devices_busy gauge",
+        f'cindral_devices_busy {busy_count}',
+        "",
+    ])
+
+    return "\n".join(lines) + "\n"
 
 
 def serve(policy_path: str | Path, state_path: str | Path, host: str, port: int, github_token: str | None = None) -> None:

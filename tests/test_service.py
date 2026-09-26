@@ -278,6 +278,48 @@ class JobEndpointTest(unittest.TestCase):
         self.assertTrue(payload["queued"])
         self.assertEqual(len(self.server.jobs.list()), 1)
 
+    def test_pool_snapshot_requires_authorization(self) -> None:
+        status, _ = self.call("GET", "/v1/pool", authorize=False)
+        self.assertEqual(status, 401)
+
+    def test_pool_snapshot_returns_pool_state(self) -> None:
+        job = self.server.jobs.enqueue("example-org/app", "sha1", "main", ("ci",))
+        self.server.jobs.claim("server", ["self-hosted", "Linux", "ARM64", "server", "fallback"])
+        status, payload = self.call("GET", "/v1/pool", authorize=True)
+        self.assertEqual(status, 200)
+        self.assertIn("devices", payload)
+        self.assertIn("queue_depth", payload)
+        self.assertEqual(payload["queue_depth"]["running"], 1)
+        self.assertEqual(payload["queue_depth"]["pending"], 0)
+        server_dev = next(d for d in payload["devices"] if d["name"] == "server")
+        self.assertTrue(server_dev["busy"])
+        self.assertEqual(server_dev["current_lease"]["job_id"], job.id)
+
+    def test_metrics_endpoint_returns_prometheus_format(self) -> None:
+        self.server.jobs.enqueue("example-org/app", "sha1", "main", ("ci",))
+        connection = HTTPConnection("127.0.0.1", self.port, timeout=10)
+        connection.request("GET", "/metrics")
+        response = connection.getresponse()
+        raw = response.read().decode("utf-8")
+        connection.close()
+
+        self.assertEqual(response.status, 200)
+        self.assertIn("text/plain", response.getheader("Content-Type", ""))
+        self.assertIn('cindral_queue_depth{state="pending"} 1', raw)
+        self.assertIn('cindral_devices{status="online"}', raw)
+        self.assertIn("cindral_oldest_pending_seconds", raw)
+
+    def test_options_returns_cors_headers(self) -> None:
+        connection = HTTPConnection("127.0.0.1", self.port, timeout=10)
+        connection.request("OPTIONS", "/v1/pool")
+        response = connection.getresponse()
+        response.read()
+        connection.close()
+
+        self.assertEqual(response.status, 204)
+        self.assertEqual(response.getheader("Access-Control-Allow-Origin"), "*")
+        self.assertIn("GET", response.getheader("Access-Control-Allow-Methods", ""))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,3 +6,7 @@ build/
 *.egg-info/
 .coverage
 .pytest_cache/
+node_modules/
+.next/
+*.tsbuildinfo
+*.env.local

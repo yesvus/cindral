@@ -1,9 +1,11 @@
 """Durable job queue with leases for direct device execution."""
+from collections.abc import Iterable
+from dataclasses import dataclass
 import json
 import sqlite3
 import time
+from typing import Any
 import uuid
-from dataclasses import dataclass
 
 PENDING = "pending"
 RUNNING = "running"
@@ -121,6 +123,15 @@ class JobStore:
             connection.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS jobs_delivery ON jobs(delivery) WHERE delivery IS NOT NULL"
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS meta (
+                    key TEXT PRIMARY KEY,
+                    value INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            connection.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('reclaims', 0)")
         finally:
             connection.close()
 
@@ -210,11 +221,16 @@ class JobStore:
             connection.execute("BEGIN IMMEDIATE")
             # return abandoned jobs before handing out work so a device that
             # disappeared does not strand its job in running forever
-            connection.execute(
+            cursor = connection.execute(
                 "UPDATE jobs SET status = ?, device = NULL, lease_expires = NULL"
                 " WHERE status = ? AND lease_expires IS NOT NULL AND lease_expires < ?",
                 (PENDING, RUNNING, claimed_at),
             )
+            if cursor.rowcount > 0:
+                connection.execute(
+                    "UPDATE meta SET value = value + ? WHERE key = 'reclaims'",
+                    (cursor.rowcount,),
+                )
             rows = connection.execute(
                 "SELECT * FROM jobs WHERE status = ? ORDER BY created_at ASC",
                 (PENDING,),
@@ -322,12 +338,124 @@ class JobStore:
         reclaimed_at = time.time() if now is None else now
         connection = self._connect()
         try:
+            connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute(
                 "UPDATE jobs SET status = ?, device = NULL, lease_expires = NULL"
                 " WHERE status = ? AND lease_expires IS NOT NULL AND lease_expires < ?",
                 (PENDING, RUNNING, reclaimed_at),
             )
-            return cursor.rowcount
+            count = cursor.rowcount
+            if count > 0:
+                connection.execute(
+                    "UPDATE meta SET value = value + ? WHERE key = 'reclaims'",
+                    (count,),
+                )
+            connection.execute("COMMIT")
+            return count
+        except Exception:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise
+        finally:
+            connection.close()
+
+    def reclaim_count(self) -> int:
+        connection = self._connect()
+        try:
+            row = connection.execute("SELECT value FROM meta WHERE key = 'reclaims'").fetchone()
+            return int(row["value"]) if row is not None else 0
+        finally:
+            connection.close()
+
+    def pool_snapshot(
+        self,
+        runners: Iterable[Any] = (),
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        snapshot_time = time.time() if now is None else now
+        connection = self._connect()
+        try:
+            status_counts = {PENDING: 0, RUNNING: 0, SUCCESS: 0, FAILURE: 0}
+            for row in connection.execute(
+                "SELECT status, count(*) AS count FROM jobs GROUP BY status"
+            ):
+                status_counts[row["status"]] = int(row["count"])
+
+            oldest_row = connection.execute(
+                "SELECT min(created_at) AS oldest FROM jobs WHERE status = ?",
+                (PENDING,),
+            ).fetchone()
+            oldest_age = 0.0
+            if oldest_row and oldest_row["oldest"] is not None:
+                oldest_age = max(0.0, snapshot_time - float(oldest_row["oldest"]))
+
+            reclaim_row = connection.execute(
+                "SELECT value FROM meta WHERE key = 'reclaims'"
+            ).fetchone()
+            reclaim_total = int(reclaim_row["value"]) if reclaim_row is not None else 0
+
+            active_lease_rows = connection.execute(
+                "SELECT id, repository, sha, ref, device, lease_expires FROM jobs WHERE status = ? AND lease_expires IS NOT NULL AND lease_expires > ?",
+                (RUNNING, snapshot_time),
+            ).fetchall()
+            leases_by_device: dict[str, dict[str, Any]] = {}
+            for row in active_lease_rows:
+                dev = row["device"]
+                if dev:
+                    expires = float(row["lease_expires"])
+                    leases_by_device[dev] = {
+                        "job_id": row["id"],
+                        "repository": row["repository"],
+                        "sha": row["sha"],
+                        "ref": row["ref"],
+                        "lease_expires": expires,
+                        "remaining_seconds": max(0.0, expires - snapshot_time),
+                    }
+
+            devices: list[dict[str, Any]] = []
+            seen_devices: set[str] = set()
+            for runner in runners:
+                dev_name = runner.name
+                seen_devices.add(dev_name)
+                lease = leases_by_device.get(dev_name)
+                devices.append(
+                    {
+                        "name": dev_name,
+                        "status": runner.status,
+                        "healthy": runner.healthy,
+                        "busy": runner.busy or (lease is not None),
+                        "labels": list(runner.labels),
+                        "current_lease": lease,
+                    }
+                )
+
+            for dev_name, lease in leases_by_device.items():
+                if dev_name not in seen_devices:
+                    devices.append(
+                        {
+                            "name": dev_name,
+                            "status": "online",
+                            "healthy": True,
+                            "busy": True,
+                            "labels": [],
+                            "current_lease": lease,
+                        }
+                    )
+
+            recent_rows = connection.execute(
+                "SELECT * FROM jobs ORDER BY created_at DESC LIMIT 50"
+            ).fetchall()
+            recent_jobs = [_row(row).as_dict() for row in recent_rows]
+
+            return {
+                "devices": devices,
+                "queue_depth": status_counts,
+                "oldest_pending_age_seconds": round(oldest_age, 2),
+                "reclaim_count": reclaim_total,
+                "success_count": status_counts.get(SUCCESS, 0),
+                "failure_count": status_counts.get(FAILURE, 0),
+                "recent_jobs": recent_jobs,
+            }
         finally:
             connection.close()
 
