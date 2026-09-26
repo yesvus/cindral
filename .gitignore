@@ -6,3 +6,9 @@ build/
 *.egg-info/
 .coverage
 .pytest_cache/
+node_modules/
+.next/
+*.tsbuildinfo
+# per-mode env files can hold CINDRAL_AGENT_TOKEN, so cover all of them
+*.env*.local
+.env*

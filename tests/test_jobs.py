@@ -140,6 +140,18 @@ class JobStoreTest(unittest.TestCase):
         self.assertEqual([job.id for job in self.store.list(jobs.RUNNING)], [first.id])
         self.assertEqual(len(self.store.list()), 2)
 
+    def test_reclaim_count_tracks_expired_leases(self) -> None:
+        self.assertEqual(self.store.reclaim_count(), 0)
+        self.store.enqueue("example-org/app", "sha1", "main", ("ci",))
+        self.store.claim("server", [], lease_seconds=30, now=100.0)
+        self.store.reclaim_expired(now=140.0)
+        self.assertEqual(self.store.reclaim_count(), 1)
+
+        # Claim again and reclaim via next claim
+        self.store.claim("server", [], lease_seconds=30, now=150.0)
+        self.store.claim("burst", [], now=190.0)
+        self.assertEqual(self.store.reclaim_count(), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

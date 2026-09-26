@@ -93,3 +93,36 @@ The agent needs Docker and permission to read the repositories it runs.
 
 Leases are authoritative: a device holds a job until its lease expires, and an
 expired lease returns the job to the queue for another device.
+
+## Observability
+
+| Endpoint | Auth | Content |
+| --- | --- | --- |
+| `GET /v1/pool` | agent bearer token | JSON pool snapshot: devices with their leases, queue depth, oldest pending age, expired lease count, reclaim total, recent jobs |
+| `GET /metrics` | none, same-origin only | Prometheus text for the same gauges |
+
+`/v1/pool` answers cross-origin preflight for the panel; the dispatch token is
+refused because it is a narrower credential than the agent token. `/metrics`
+carries no `Access-Control-Allow-Origin`, so a browser page a scraper visits
+cannot read pool state.
+
+An expired lease is counted as pending rather than running, and reported
+separately as `expired_lease_count` / `cindral_expired_leases`. Both endpoints
+stay off the public Ingress; only the signed `/cindral/dispatch` path is
+published.
+
+## Control panel
+
+`web/` is a Next.js App Router app built on the Helmdeck admin shell. It reads
+the snapshot server-side and renders Overview, Devices, and Queue views.
+
+| Variable | Meaning |
+| --- | --- |
+| `CINDRAL_API_URL` | broker base URL, default `http://127.0.0.1:8095` |
+| `CINDRAL_AGENT_TOKEN` | token the panel presents to the broker |
+| `CINDRAL_CONTROL_PANEL_TOKEN` | token an operator must present to the panel; unset means every request is refused |
+| `CINDRAL_API_TIMEOUT_MS` | broker request timeout, default `5000` |
+
+The panel holds the agent token server-side, so it requires
+`CINDRAL_CONTROL_PANEL_TOKEN` from the caller before rendering any lease or CI
+log data. Without it, requests are refused rather than served open.

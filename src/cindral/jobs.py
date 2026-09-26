@@ -1,9 +1,11 @@
 """Durable job queue with leases for direct device execution."""
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 import json
 import sqlite3
 import time
+from typing import Any
 import uuid
-from dataclasses import dataclass
 
 PENDING = "pending"
 RUNNING = "running"
@@ -11,6 +13,35 @@ SUCCESS = "success"
 FAILURE = "failure"
 TERMINAL = (SUCCESS, FAILURE)
 MAX_LOG_CHARS = 64 * 1024
+RECENT_JOB_LIMIT = 50
+# the panel renders a preview, not the full stored log, so a snapshot stays
+# small enough to serve inline instead of shipping megabytes of CI output
+SNAPSHOT_LOG_CHARS = 4000
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS jobs (
+    id TEXT PRIMARY KEY,
+    repository TEXT NOT NULL,
+    sha TEXT NOT NULL,
+    ref TEXT NOT NULL,
+    command TEXT NOT NULL,
+    labels TEXT NOT NULL,
+    timeout INTEGER NOT NULL,
+    created_at REAL NOT NULL,
+    status TEXT NOT NULL,
+    device TEXT,
+    lease_expires REAL,
+    exit_code INTEGER,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    delivery TEXT,
+    status_sha TEXT,
+    log TEXT
+);
+CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS jobs_delivery ON jobs(delivery) WHERE delivery IS NOT NULL;
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER);
+INSERT OR IGNORE INTO meta (key, value) VALUES ('reclaims', 0);
+"""
 
 
 @dataclass(frozen=True)
@@ -88,39 +119,11 @@ class JobStore:
     def _init(self) -> None:
         connection = self._connect()
         try:
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS jobs (
-                    id TEXT PRIMARY KEY,
-                    repository TEXT NOT NULL,
-                    sha TEXT NOT NULL,
-                    ref TEXT NOT NULL,
-                    command TEXT NOT NULL,
-                    labels TEXT NOT NULL,
-                    timeout INTEGER NOT NULL,
-                    created_at REAL NOT NULL,
-                    status TEXT NOT NULL,
-                    device TEXT,
-                    lease_expires REAL,
-                    exit_code INTEGER,
-                    attempts INTEGER NOT NULL DEFAULT 0,
-                    delivery TEXT,
-                    status_sha TEXT,
-                    log TEXT
-                )
-                """
-            )
+            connection.executescript(SCHEMA)
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(jobs)")}
-            if "log" not in columns:
-                connection.execute("ALTER TABLE jobs ADD COLUMN log TEXT")
-            if "status_sha" not in columns:
-                connection.execute("ALTER TABLE jobs ADD COLUMN status_sha TEXT")
-            connection.execute(
-                "CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status, created_at)"
-            )
-            connection.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS jobs_delivery ON jobs(delivery) WHERE delivery IS NOT NULL"
-            )
+            for column in ("log", "status_sha"):
+                if column not in columns:
+                    connection.execute(f"ALTER TABLE jobs ADD COLUMN {column} TEXT")
         finally:
             connection.close()
 
@@ -187,12 +190,11 @@ class JobStore:
         )
 
     def get(self, job_id: str) -> Job | None:
-        connection = self._connect()
-        try:
+        def fetch(connection: sqlite3.Connection) -> Job | None:
             row = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
             return _row(row) if row is not None else None
-        finally:
-            connection.close()
+
+        return self._read(fetch)
 
     def claim(
         self,
@@ -210,11 +212,16 @@ class JobStore:
             connection.execute("BEGIN IMMEDIATE")
             # return abandoned jobs before handing out work so a device that
             # disappeared does not strand its job in running forever
-            connection.execute(
+            cursor = connection.execute(
                 "UPDATE jobs SET status = ?, device = NULL, lease_expires = NULL"
                 " WHERE status = ? AND lease_expires IS NOT NULL AND lease_expires < ?",
                 (PENDING, RUNNING, claimed_at),
             )
+            if cursor.rowcount > 0:
+                connection.execute(
+                    "UPDATE meta SET value = value + ? WHERE key = 'reclaims'",
+                    (cursor.rowcount,),
+                )
             rows = connection.execute(
                 "SELECT * FROM jobs WHERE status = ? ORDER BY created_at ASC",
                 (PENDING,),
@@ -322,27 +329,72 @@ class JobStore:
         reclaimed_at = time.time() if now is None else now
         connection = self._connect()
         try:
+            connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute(
                 "UPDATE jobs SET status = ?, device = NULL, lease_expires = NULL"
                 " WHERE status = ? AND lease_expires IS NOT NULL AND lease_expires < ?",
                 (PENDING, RUNNING, reclaimed_at),
             )
-            return cursor.rowcount
+            count = cursor.rowcount
+            if count > 0:
+                connection.execute(
+                    "UPDATE meta SET value = value + ? WHERE key = 'reclaims'",
+                    (count,),
+                )
+            connection.execute("COMMIT")
+            return count
+        except Exception:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise
         finally:
             connection.close()
 
-    def list(self, status: str | None = None) -> list[Job]:
+    def reclaim_count(self) -> int:
         connection = self._connect()
         try:
-            if status is None:
-                rows = connection.execute(
-                    "SELECT * FROM jobs ORDER BY created_at ASC"
-                ).fetchall()
-            else:
-                rows = connection.execute(
-                    "SELECT * FROM jobs WHERE status = ? ORDER BY created_at ASC",
-                    (status,),
-                ).fetchall()
-            return [_row(row) for row in rows]
+            row = connection.execute("SELECT value FROM meta WHERE key = 'reclaims'").fetchone()
+            return int(row["value"]) if row is not None else 0
         finally:
             connection.close()
+
+    def _read(self, build: Callable[[sqlite3.Connection], Any]) -> Any:
+        connection = self._connect()
+        try:
+            return build(connection)
+        finally:
+            connection.close()
+
+    def pool_snapshot(
+        self,
+        runners: Iterable[Any] = (),
+        now: float | None = None,
+        include_recent: bool = True,
+    ) -> dict[str, Any]:
+        from .pool import pool_snapshot
+
+        return self._read(
+            lambda connection: pool_snapshot(connection, runners, now, include_recent)
+        )
+
+    def list(self, status: str | None = None) -> list[Job]:
+        where = " WHERE status = ?" if status is not None else ""
+        params = (status,) if status is not None else ()
+
+        def fetch(connection: sqlite3.Connection) -> list[Job]:
+            rows = connection.execute(
+                f"SELECT * FROM jobs{where} ORDER BY created_at ASC", params
+            ).fetchall()
+            return [_row(row) for row in rows]
+
+        return self._read(fetch)
+
+    def metrics(self, runners: Iterable[Any] = ()) -> str:
+        """Render Prometheus text without materializing the recent-job log."""
+        from .pool import pool_snapshot, render_metrics
+
+        return self._read(
+            lambda connection: render_metrics(
+                runners, pool_snapshot(connection, runners, include_recent=False)
+            )
+        )
