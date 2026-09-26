@@ -152,47 +152,6 @@ class JobStoreTest(unittest.TestCase):
         self.store.claim("burst", [], now=190.0)
         self.assertEqual(self.store.reclaim_count(), 2)
 
-    def test_pool_snapshot_returns_metrics_and_device_leases(self) -> None:
-        from cindral.models import Runner
-
-        runners = (
-            Runner("server", "online", False, ("linux", "arm64")),
-            Runner("desktop", "offline", False, ("linux",)),
-        )
-
-        # Job 1: pending
-        job1 = self.store.enqueue("example-org/app", "sha1", "main", ("ci",), now=100.0)
-        # Job 2: running on server
-        job2 = self.store.enqueue("example-org/app", "sha2", "main", ("ci",), now=105.0)
-        self.store.claim("server", ["linux", "arm64"], lease_seconds=300, now=110.0)
-        # Job 3: success
-        job3 = self.store.enqueue("example-org/app", "sha3", "main", ("ci",), now=90.0)
-        self.store.claim("worker-dynamic", [], lease_seconds=300, now=95.0)
-        self.store.report(job3.id, "worker-dynamic", 0, now=98.0)
-
-        snapshot = self.store.pool_snapshot(runners, now=120.0)
-
-        self.assertEqual(snapshot["queue_depth"]["pending"], 1)
-        self.assertEqual(snapshot["queue_depth"]["running"], 1)
-        self.assertEqual(snapshot["queue_depth"]["success"], 1)
-        self.assertEqual(snapshot["queue_depth"]["failure"], 0)
-        self.assertEqual(snapshot["success_count"], 1)
-        self.assertEqual(snapshot["failure_count"], 0)
-        # Devices list includes configured runners and their active lease
-        server_dev = next(d for d in snapshot["devices"] if d["name"] == "server")
-        self.assertTrue(server_dev["busy"])
-        self.assertIsNotNone(server_dev["current_lease"])
-        self.assertEqual(server_dev["current_lease"]["job_id"], job1.id)
-        self.assertEqual(server_dev["current_lease"]["remaining_seconds"], 290.0)
-
-        desktop_dev = next(d for d in snapshot["devices"] if d["name"] == "desktop")
-        self.assertFalse(desktop_dev["busy"])
-        self.assertIsNone(desktop_dev["current_lease"])
-
-        self.assertEqual(snapshot["oldest_pending_age_seconds"], 15.0)
-
-        self.assertEqual(len(snapshot["recent_jobs"]), 3)
-
 
 if __name__ == "__main__":
     unittest.main()

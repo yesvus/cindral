@@ -1,5 +1,5 @@
 """Durable job queue with leases for direct device execution."""
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 import json
 import sqlite3
@@ -13,6 +13,35 @@ SUCCESS = "success"
 FAILURE = "failure"
 TERMINAL = (SUCCESS, FAILURE)
 MAX_LOG_CHARS = 64 * 1024
+RECENT_JOB_LIMIT = 50
+# the panel renders a preview, not the full stored log, so a snapshot stays
+# small enough to serve inline instead of shipping megabytes of CI output
+SNAPSHOT_LOG_CHARS = 4000
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS jobs (
+    id TEXT PRIMARY KEY,
+    repository TEXT NOT NULL,
+    sha TEXT NOT NULL,
+    ref TEXT NOT NULL,
+    command TEXT NOT NULL,
+    labels TEXT NOT NULL,
+    timeout INTEGER NOT NULL,
+    created_at REAL NOT NULL,
+    status TEXT NOT NULL,
+    device TEXT,
+    lease_expires REAL,
+    exit_code INTEGER,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    delivery TEXT,
+    status_sha TEXT,
+    log TEXT
+);
+CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS jobs_delivery ON jobs(delivery) WHERE delivery IS NOT NULL;
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER);
+INSERT OR IGNORE INTO meta (key, value) VALUES ('reclaims', 0);
+"""
 
 
 @dataclass(frozen=True)
@@ -90,48 +119,11 @@ class JobStore:
     def _init(self) -> None:
         connection = self._connect()
         try:
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS jobs (
-                    id TEXT PRIMARY KEY,
-                    repository TEXT NOT NULL,
-                    sha TEXT NOT NULL,
-                    ref TEXT NOT NULL,
-                    command TEXT NOT NULL,
-                    labels TEXT NOT NULL,
-                    timeout INTEGER NOT NULL,
-                    created_at REAL NOT NULL,
-                    status TEXT NOT NULL,
-                    device TEXT,
-                    lease_expires REAL,
-                    exit_code INTEGER,
-                    attempts INTEGER NOT NULL DEFAULT 0,
-                    delivery TEXT,
-                    status_sha TEXT,
-                    log TEXT
-                )
-                """
-            )
+            connection.executescript(SCHEMA)
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(jobs)")}
-            if "log" not in columns:
-                connection.execute("ALTER TABLE jobs ADD COLUMN log TEXT")
-            if "status_sha" not in columns:
-                connection.execute("ALTER TABLE jobs ADD COLUMN status_sha TEXT")
-            connection.execute(
-                "CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status, created_at)"
-            )
-            connection.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS jobs_delivery ON jobs(delivery) WHERE delivery IS NOT NULL"
-            )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS meta (
-                    key TEXT PRIMARY KEY,
-                    value INTEGER NOT NULL DEFAULT 0
-                )
-                """
-            )
-            connection.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('reclaims', 0)")
+            for column in ("log", "status_sha"):
+                if column not in columns:
+                    connection.execute(f"ALTER TABLE jobs ADD COLUMN {column} TEXT")
         finally:
             connection.close()
 
@@ -198,12 +190,11 @@ class JobStore:
         )
 
     def get(self, job_id: str) -> Job | None:
-        connection = self._connect()
-        try:
+        def fetch(connection: sqlite3.Connection) -> Job | None:
             row = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
             return _row(row) if row is not None else None
-        finally:
-            connection.close()
+
+        return self._read(fetch)
 
     def claim(
         self,
@@ -367,110 +358,43 @@ class JobStore:
         finally:
             connection.close()
 
+    def _read(self, build: Callable[[sqlite3.Connection], Any]) -> Any:
+        connection = self._connect()
+        try:
+            return build(connection)
+        finally:
+            connection.close()
+
     def pool_snapshot(
         self,
         runners: Iterable[Any] = (),
         now: float | None = None,
+        include_recent: bool = True,
     ) -> dict[str, Any]:
-        snapshot_time = time.time() if now is None else now
-        connection = self._connect()
-        try:
-            status_counts = {PENDING: 0, RUNNING: 0, SUCCESS: 0, FAILURE: 0}
-            for row in connection.execute(
-                "SELECT status, count(*) AS count FROM jobs GROUP BY status"
-            ):
-                status_counts[row["status"]] = int(row["count"])
+        from .pool import pool_snapshot
 
-            oldest_row = connection.execute(
-                "SELECT min(created_at) AS oldest FROM jobs WHERE status = ?",
-                (PENDING,),
-            ).fetchone()
-            oldest_age = 0.0
-            if oldest_row and oldest_row["oldest"] is not None:
-                oldest_age = max(0.0, snapshot_time - float(oldest_row["oldest"]))
-
-            reclaim_row = connection.execute(
-                "SELECT value FROM meta WHERE key = 'reclaims'"
-            ).fetchone()
-            reclaim_total = int(reclaim_row["value"]) if reclaim_row is not None else 0
-
-            active_lease_rows = connection.execute(
-                "SELECT id, repository, sha, ref, device, lease_expires FROM jobs WHERE status = ? AND lease_expires IS NOT NULL AND lease_expires > ?",
-                (RUNNING, snapshot_time),
-            ).fetchall()
-            leases_by_device: dict[str, dict[str, Any]] = {}
-            for row in active_lease_rows:
-                dev = row["device"]
-                if dev:
-                    expires = float(row["lease_expires"])
-                    leases_by_device[dev] = {
-                        "job_id": row["id"],
-                        "repository": row["repository"],
-                        "sha": row["sha"],
-                        "ref": row["ref"],
-                        "lease_expires": expires,
-                        "remaining_seconds": max(0.0, expires - snapshot_time),
-                    }
-
-            devices: list[dict[str, Any]] = []
-            seen_devices: set[str] = set()
-            for runner in runners:
-                dev_name = runner.name
-                seen_devices.add(dev_name)
-                lease = leases_by_device.get(dev_name)
-                devices.append(
-                    {
-                        "name": dev_name,
-                        "status": runner.status,
-                        "healthy": runner.healthy,
-                        "busy": runner.busy or (lease is not None),
-                        "labels": list(runner.labels),
-                        "current_lease": lease,
-                    }
-                )
-
-            for dev_name, lease in leases_by_device.items():
-                if dev_name not in seen_devices:
-                    devices.append(
-                        {
-                            "name": dev_name,
-                            "status": "online",
-                            "healthy": True,
-                            "busy": True,
-                            "labels": [],
-                            "current_lease": lease,
-                        }
-                    )
-
-            recent_rows = connection.execute(
-                "SELECT * FROM jobs ORDER BY created_at DESC LIMIT 50"
-            ).fetchall()
-            recent_jobs = [_row(row).as_dict() for row in recent_rows]
-
-            return {
-                "devices": devices,
-                "queue_depth": status_counts,
-                "oldest_pending_age_seconds": round(oldest_age, 2),
-                "reclaim_count": reclaim_total,
-                "success_count": status_counts.get(SUCCESS, 0),
-                "failure_count": status_counts.get(FAILURE, 0),
-                "recent_jobs": recent_jobs,
-            }
-        finally:
-            connection.close()
+        return self._read(
+            lambda connection: pool_snapshot(connection, runners, now, include_recent)
+        )
 
     def list(self, status: str | None = None) -> list[Job]:
-        connection = self._connect()
-        try:
-            if status is None:
-                rows = connection.execute(
-                    "SELECT * FROM jobs ORDER BY created_at ASC"
-                ).fetchall()
-            else:
-                rows = connection.execute(
-                    "SELECT * FROM jobs WHERE status = ? ORDER BY created_at ASC",
-                    (status,),
-                ).fetchall()
+        where = " WHERE status = ?" if status is not None else ""
+        params = (status,) if status is not None else ()
+
+        def fetch(connection: sqlite3.Connection) -> list[Job]:
+            rows = connection.execute(
+                f"SELECT * FROM jobs{where} ORDER BY created_at ASC", params
+            ).fetchall()
             return [_row(row) for row in rows]
-        finally:
-            connection.close()
+
+        return self._read(fetch)
+
+    def metrics(self, runners: Iterable[Any] = ()) -> str:
+        """Render Prometheus text without materializing the recent-job log."""
+        from .pool import pool_snapshot, render_metrics
+
+        return self._read(
+            lambda connection: render_metrics(
+                runners, pool_snapshot(connection, runners, include_recent=False)
+            )
+        )

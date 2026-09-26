@@ -32,3 +32,20 @@ jobs:
       - run: docker build -t cindral:ci .
       - run: docker run --rm cindral:ci --help
       - run: docker run --rm --entrypoint python cindral:ci -c "import cindral.onboarding"
+
+  panel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run ci

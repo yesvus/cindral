@@ -9,4 +9,6 @@ build/
 node_modules/
 .next/
 *.tsbuildinfo
-*.env.local
+# per-mode env files can hold CINDRAL_AGENT_TOKEN, so cover all of them
+*.env*.local
+.env*

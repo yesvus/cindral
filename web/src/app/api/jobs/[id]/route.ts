@@ -1,14 +1,23 @@
 import { NextResponse } from "next/server";
-import { getJob } from "@/lib/cindral";
+import { panelAuthorized, unauthorized } from "@/lib/auth";
+import { BrokerError, getJob } from "@/lib/cindral";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   props: { params: Promise<{ id: string }> }
 ) {
-  const params = await props.params;
-  const job = await getJob(params.id);
-  if (!job) {
-    return NextResponse.json({ error: "Job not found" }, { status: 404 });
+  if (!panelAuthorized(request)) {
+    return unauthorized();
   }
-  return NextResponse.json(job);
+  const { id } = await props.params;
+  try {
+    return NextResponse.json(await getJob(id));
+  } catch (error) {
+    if (error instanceof BrokerError) {
+      const status =
+        error.reason === "unauthorized" ? 502 : error.message === "job not found" ? 404 : 503;
+      return NextResponse.json({ error: error.message }, { status });
+    }
+    return NextResponse.json({ error: "job lookup failed" }, { status: 503 });
+  }
 }

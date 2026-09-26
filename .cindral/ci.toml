@@ -17,6 +17,11 @@ run = "python -m compileall -q src"
 [[steps]]
 run = "python -m unittest discover -s tests"
 
+# The control panel is a separate toolchain, so it is checked in a node
+# container against the daemon this contract already mounts.
+[[steps]]
+run = "docker run --rm -v \"$PWD/web:/app\" -w /app node:22-bookworm sh -lc 'corepack enable && pnpm install --frozen-lockfile && pnpm run ci'"
+
 # Unit tests run against an editable install, so they cannot detect a
 # dependency the Dockerfile forgets to install. That only surfaces when the
 # built image imports the module, which is how a missing PyYAML reached a

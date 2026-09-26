@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { AdminShell, type AdminNavGroup } from "@yesvus/helmdeck";
 
@@ -11,6 +12,10 @@ const navigation: AdminNavGroup[] = [
     ],
   },
 ];
+
+export const metadata: Metadata = {
+  title: "Runner Pool",
+};
 
 export default function DashboardLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
