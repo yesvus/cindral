@@ -1,10 +1,12 @@
+import http.client
 import io
 import os
 import tarfile
 import tempfile
+import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from cindral.agent import JobSpec
 from cindral.cache_adapters import (
@@ -14,7 +16,9 @@ from cindral.cache_adapters import (
     detect_cache_plans,
     restore_archive,
     restore_caches,
+    store_caches,
 )
+from cindral.docker_support import make_cache_readable
 
 
 class CacheAdapterTest(unittest.TestCase):
@@ -170,6 +174,53 @@ class CacheAdapterTest(unittest.TestCase):
         output = io.StringIO()
         restore_caches(Client(), job, plan, self.root, output)
         self.assertIn("cache restore skipped for pnpm", output.getvalue())
+
+    def test_http_exception_degrades_gracefully_during_restore_and_store(self) -> None:
+        class IncompleteClient:
+            def lookup(self, *args):
+                return {"digest": "a" * 64, "key": "key"}
+
+            def download(self, *args):
+                raise http.client.IncompleteRead(b"partial")
+
+            def upload(self, *args):
+                raise http.client.IncompleteRead(b"partial")
+
+        cache_dir = self.root / "cache" / "pnpm"
+        cache_dir.mkdir(parents=True)
+        (cache_dir / "file.txt").write_text("hello")
+        plan = (
+            CachePlan("pnpm", "arm64", "key", (), cache_dir),
+        )
+        job = JobSpec("id", "owner/repo", "sha", "main", (), 60)
+        output = io.StringIO()
+        restore_caches(IncompleteClient(), job, plan, self.root, output)
+        self.assertIn("cache restore skipped for pnpm", output.getvalue())
+
+        output_store = io.StringIO()
+        store_caches(IncompleteClient(), job, plan, self.root, output_store)
+        self.assertIn("cache write skipped for pnpm", output_store.getvalue())
+
+    def test_make_cache_readable_invokes_chown_with_agent_uid_and_gid(self) -> None:
+        runner = MagicMock()
+        log = io.StringIO()
+        cancel = threading.Event()
+        cache_dir = self.root / "cache"
+        cache_dir.mkdir()
+
+        make_cache_readable(runner, "docker", cache_dir, "test-image:latest", log, cancel)
+
+        runner.check.assert_called_once()
+        cmd = runner.check.call_args[0][0]
+        uid = os.getuid() if hasattr(os, "getuid") else 0
+        gid = os.getgid() if hasattr(os, "getgid") else 0
+        self.assertIn("--network", cmd)
+        self.assertIn("none", cmd)
+        self.assertIn("--user", cmd)
+        self.assertIn("0:0", cmd)
+        self.assertIn("--entrypoint", cmd)
+        self.assertIn("chown", cmd)
+        self.assertIn(f"{uid}:{gid}", cmd)
 
 
 if __name__ == "__main__":

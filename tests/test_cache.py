@@ -100,6 +100,24 @@ class CacheStoreTest(unittest.TestCase):
             self.store.put("owner/repo", "main", "arm64", "short", io.BytesIO(b"x"), 2)
         self.assertIsNone(self.store.lookup("owner/repo", "main", "arm64", "short"))
 
+    def test_lookup_collects_orphan_blobs(self) -> None:
+        orphan = self.store.blob_path("a" * 64)
+        orphan.parent.mkdir(parents=True, exist_ok=True)
+        orphan.write_bytes(b"orphan")
+        self.assertTrue(orphan.exists())
+        self.assertIsNone(self.store.lookup("owner/repo", "main", "arm64", "missing", now=11))
+        self.assertFalse(orphan.exists())
+
+    def test_put_cleans_up_expired_blobs_when_existing_key_is_provided(self) -> None:
+        store = CacheStore(Path(self.tmp.name) / "orphan-expiry", ttl_seconds=2)
+        old_entry, _ = store.put("owner/repo", "main", "arm64", "old", io.BytesIO(b"old"), 3, now=1)
+        existing_entry, _ = store.put("owner/repo", "main", "arm64", "existing", io.BytesIO(b"existing"), 8, now=1)
+        old_blob = store.blob_path(old_entry.digest)
+        self.assertTrue(old_blob.exists())
+        # now=4 means 'old' is expired; putting 'existing' again matches existing key
+        store.put("owner/repo", "main", "arm64", "existing", io.BytesIO(b"existing"), 8, now=4)
+        self.assertFalse(old_blob.exists())
+
     def test_metrics_include_hits_misses_and_hit_ratio(self) -> None:
         self.put("present", b"data")
         self.store.lookup("owner/repo", "main", "arm64", "present", now=11)

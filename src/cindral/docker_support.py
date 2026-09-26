@@ -1,4 +1,5 @@
 """Docker daemon and CLI mounts required by trusted job contracts."""
+import os
 import shutil
 import threading
 from pathlib import Path
@@ -43,21 +44,25 @@ def make_cache_readable(
     log: TextIO,
     cancel: threading.Event,
 ) -> None:
+    uid = os.getuid() if hasattr(os, "getuid") else 0
+    gid = os.getgid() if hasattr(os, "getgid") else 0
     try:
         runner.check(
             [
                 docker,
                 "run",
                 "--rm",
+                "--network",
+                "none",
                 "--user",
-                "0",
-                "--entrypoint",
-                "chmod",
+                "0:0",
                 "-v",
                 f"{cache_path}:/cindral-cache",
+                "--entrypoint",
+                "chown",
                 image,
                 "-R",
-                "a+rX",
+                f"{uid}:{gid}",
                 "/cindral-cache",
             ],
             log,

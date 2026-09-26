@@ -9,7 +9,7 @@ from unittest.mock import patch
 from cindral import jobs
 from cindral.github import RepositoryRunner
 from cindral.cache import CacheStore
-from cindral.cache_client import CindralCacheClient
+from cindral.cache_client import CacheClientError, CindralCacheClient
 from cindral.jobs import JobStore
 from cindral.policy import Policy
 from cindral.service import WEBHOOK_PATH, CindralHandler, CindralServer
@@ -81,7 +81,7 @@ class JobEndpointTest(unittest.TestCase):
         if authorize:
             merged["Authorization"] = f"Bearer {token or AGENT_TOKEN}"
         merged.update(headers or {})
-        payload = json.dumps(body).encode() if body is not None else None
+        payload = body if isinstance(body, (bytes, bytearray)) else (json.dumps(body).encode() if body is not None else None)
         connection = HTTPConnection("127.0.0.1", self.port, timeout=10)
         connection.request(method, path, body=payload, headers=merged)
         response = connection.getresponse()
@@ -429,6 +429,21 @@ class JobEndpointTest(unittest.TestCase):
             authorize=False,
         )
         self.assertEqual(status, 401)
+        status, _ = self.call(
+            "PUT",
+            "/v1/cache/entries",
+            headers={
+                "Authorization": f"Bearer {POOL_TOKEN}",
+                "Content-Type": "application/octet-stream",
+                "X-Cindral-Repository": REPO,
+                "X-Cindral-Branch": "main",
+                "X-Cindral-Architecture": "arm64",
+                "X-Cindral-Key": "key",
+            },
+            body=b"data",
+            authorize=False,
+        )
+        self.assertEqual(status, 401)
 
     def test_cache_blob_requires_a_matching_scoped_entry(self) -> None:
         client = CindralCacheClient(f"http://127.0.0.1:{self.port}", AGENT_TOKEN)
@@ -437,7 +452,7 @@ class JobEndpointTest(unittest.TestCase):
             archive.write_bytes(b"cache contents")
             uploaded = client.upload(REPO, "main", "arm64", "key", archive)
             other_scope = Path(tmp) / "other.tar.gz"
-            with self.assertRaises(Exception):
+            with self.assertRaises(CacheClientError):
                 client.download(uploaded["entry"]["digest"], other_scope, "another/repo", "main", "arm64", "key")
             self.assertFalse(other_scope.exists())
 

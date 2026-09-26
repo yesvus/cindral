@@ -91,6 +91,9 @@ class CindralCacheClient:
             if written != length or digest_state.hexdigest() != digest:
                 destination.unlink(missing_ok=True)
                 raise CacheClientError("cache blob failed its content digest check")
+        except (http.client.HTTPException, OSError) as exc:
+            destination.unlink(missing_ok=True)
+            raise CacheClientError(f"cache download failed: {exc}") from exc
         finally:
             response.close()
             connection.close()
@@ -137,6 +140,8 @@ class CindralCacheClient:
             if not isinstance(result, dict) or not isinstance(result.get("entry"), dict):
                 raise CacheClientError("cache upload returned an invalid response")
             return result
+        except (http.client.HTTPException, OSError) as exc:
+            raise CacheClientError(f"cache upload failed: {exc}") from exc
         finally:
             connection.close()
 
@@ -151,18 +156,24 @@ class CindralCacheClient:
             )
             response = connection.getresponse()
             return response.status, dict(response.getheaders()), response.read(1024 * 1024)
+        except (http.client.HTTPException, OSError) as exc:
+            raise CacheClientError(f"cache request failed: {exc}") from exc
         finally:
             connection.close()
 
     def _open(self, method: str, path: str, headers: dict[str, str] | None = None):
         connection = self._connection()
-        connection.request(
-            method,
-            self._path(path),
-            headers={"Authorization": f"Bearer {self.token}", **(headers or {})},
-        )
-        response = connection.getresponse()
-        return connection, response
+        try:
+            connection.request(
+                method,
+                self._path(path),
+                headers={"Authorization": f"Bearer {self.token}", **(headers or {})},
+            )
+            response = connection.getresponse()
+            return connection, response
+        except (http.client.HTTPException, OSError) as exc:
+            connection.close()
+            raise CacheClientError(f"cache request failed: {exc}") from exc
 
     def _connection(self):
         connection_type = http.client.HTTPSConnection if self.url.scheme == "https" else http.client.HTTPConnection

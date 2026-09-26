@@ -1,6 +1,7 @@
 """Tool-specific dependency and build cache adapters."""
 from dataclasses import dataclass
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -266,7 +267,15 @@ def restore_caches(
                 )
                 restore_archive(archive, plan.path)
             log.write(f"cindral: cache hit {plan.name} ({entry['key']})\n")
-        except (CacheClientError, OSError, ValueError, KeyError, tarfile.TarError, EOFError) as exc:
+        except (
+            CacheClientError,
+            http.client.HTTPException,
+            OSError,
+            ValueError,
+            KeyError,
+            tarfile.TarError,
+            EOFError,
+        ) as exc:
             log.write(f"cindral: cache restore skipped for {plan.name}: {exc}\n")
     return environment
 
@@ -290,7 +299,14 @@ def store_caches(
                 result = client.upload(job.repository, job.ref, plan.architecture, plan.key, archive)
             outcome = "stored" if result.get("created") else "already exists"
             log.write(f"cindral: cache {outcome} {plan.name}\n")
-        except (CacheClientError, OSError, ValueError, tarfile.TarError, EOFError) as exc:
+        except (
+            CacheClientError,
+            http.client.HTTPException,
+            OSError,
+            ValueError,
+            tarfile.TarError,
+            EOFError,
+        ) as exc:
             log.write(f"cindral: cache write skipped for {plan.name}: {exc}\n")
 
 

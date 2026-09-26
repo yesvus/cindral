@@ -141,8 +141,8 @@ class CacheStore:
         current = time.time() if now is None else now
         with self._lock, self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            if self._expire(connection, current):
-                self._collect_blobs(connection)
+            self._expire(connection, current)
+            self._collect_blobs(connection)
             row = connection.execute(
                 "SELECT * FROM cache_entries WHERE repository=? AND branch=? AND architecture=? AND key=?",
                 (repository, branch, architecture, key),
@@ -212,7 +212,8 @@ class CacheStore:
             hexdigest = digest.hexdigest()
             with self._lock, self._connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
-                self._expire(connection, current)
+                if self._expire(connection, current):
+                    self._collect_blobs(connection)
                 existing = connection.execute(
                     "SELECT * FROM cache_entries WHERE repository=? AND branch=? AND architecture=? AND key=?",
                     (repository, branch, architecture, key),
