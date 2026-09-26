@@ -103,7 +103,7 @@ def parse_workflow(path: Path) -> Workflow:
                 if isinstance(step, dict):
                     steps.append(step)
 
-        if "if" in raw_job and raw_job["if"] not in (True, "true", "always()", None):
+        if "if" in raw_job and raw_job["if"] not in (True, "true", None):
             raise WorkflowError(f"job '{job_id}' uses unsupported 'if' condition (requires act engine)")
 
         raw_timeout = raw_job.get("timeout-minutes")
@@ -144,11 +144,24 @@ def find_workflows(repo: Path) -> list[Workflow]:
     return workflows
 
 
-def event_matches(on_spec: Any, event_name: str, branch_or_tag: str) -> bool:
+def _patterns(value: Any) -> list[str] | None:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return None
+
+
+def event_matches(
+    on_spec: Any,
+    event_name: str,
+    branch_or_tag: str,
+    base_ref: str | None = None,
+) -> bool:
     if isinstance(on_spec, str):
         return on_spec == event_name
     if isinstance(on_spec, list):
-        return any(event_matches(item, event_name, branch_or_tag) for item in on_spec)
+        return any(event_matches(item, event_name, branch_or_tag, base_ref) for item in on_spec)
     if isinstance(on_spec, dict):
         if event_name not in on_spec:
             return False
@@ -162,34 +175,34 @@ def event_matches(on_spec: Any, event_name: str, branch_or_tag: str) -> bool:
                 if is_tag
                 else branch_or_tag.removeprefix("refs/heads/")
             )
+            has_tag_filter = "tags" in config or "tags-ignore" in config
+            has_branch_filter = "branches" in config or "branches-ignore" in config
             if is_tag:
-                tags = config.get("tags")
-                tags_ignore = config.get("tags-ignore")
-                if tags is not None and isinstance(tags, list):
-                    return any(fnmatch.fnmatch(clean_ref, p) for p in tags)
-                if tags_ignore is not None and isinstance(tags_ignore, list):
-                    return not any(fnmatch.fnmatch(clean_ref, p) for p in tags_ignore)
-                if "tags" in config or "tags-ignore" in config:
+                if has_branch_filter and not has_tag_filter:
                     return False
-                if "branches" in config or "branches-ignore" in config:
+                tags = _patterns(config.get("tags"))
+                tags_ignore = _patterns(config.get("tags-ignore"))
+                if tags is not None and not any(fnmatch.fnmatch(clean_ref, p) for p in tags):
+                    return False
+                if tags_ignore is not None and any(fnmatch.fnmatch(clean_ref, p) for p in tags_ignore):
                     return False
                 return True
+            if has_tag_filter and not has_branch_filter:
+                return False
             if event_name == "pull_request":
-                if branch_or_tag.startswith("refs/pull/") or branch_or_tag.startswith("pull/"):
-                    return True
-                branches = config.get("branches")
-                if branches is not None and isinstance(branches, list):
-                    return any(fnmatch.fnmatch(clean_ref, p) for p in branches)
+                target = base_ref or (clean_ref if not branch_or_tag.startswith("refs/pull/") else "main")
+                branches = _patterns(config.get("branches"))
+                branches_ignore = _patterns(config.get("branches-ignore"))
+                if branches is not None and not any(fnmatch.fnmatch(target, p) for p in branches):
+                    return False
+                if branches_ignore is not None and any(fnmatch.fnmatch(target, p) for p in branches_ignore):
+                    return False
                 return True
-            branches = config.get("branches")
-            branches_ignore = config.get("branches-ignore")
-            if branches is not None and isinstance(branches, list):
-                if not any(fnmatch.fnmatch(clean_ref, p) for p in branches):
-                    return False
-            if branches_ignore is not None and isinstance(branches_ignore, list):
-                if any(fnmatch.fnmatch(clean_ref, p) for p in branches_ignore):
-                    return False
-            if "tags" in config and not is_tag and "branches" not in config and "branches-ignore" not in config:
+            branches = _patterns(config.get("branches"))
+            branches_ignore = _patterns(config.get("branches-ignore"))
+            if branches is not None and not any(fnmatch.fnmatch(clean_ref, p) for p in branches):
+                return False
+            if branches_ignore is not None and any(fnmatch.fnmatch(clean_ref, p) for p in branches_ignore):
                 return False
         return True
     return False
@@ -231,7 +244,7 @@ def resolve_workflow_job(repo: Path, job: JobSpec) -> tuple[Workflow, WorkflowJo
 def workflow_to_contract(job: WorkflowJob) -> Contract:
     steps: list[str] = []
     for step in job.steps:
-        if "if" in step and step["if"] not in (True, "true", "always()", None):
+        if "if" in step and step["if"] not in (True, "true", None):
             raise WorkflowError(f"step uses unsupported 'if' condition (requires act engine)")
         if "working-directory" in step:
             raise WorkflowError(f"step uses unsupported 'working-directory' (requires act engine)")

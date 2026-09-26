@@ -305,7 +305,8 @@ class DockerExecutor:
         services: list[str] = []
         unhealthy: list[tuple[str, Service]] = []
         self.runner.check([self.docker, "network", "create", network], log, cancel=cancel)
-        timer = threading.Timer(contract.timeout_minutes * 60, cancel.set) if contract.timeout_minutes else None
+        timeout = min(job.timeout, contract.timeout_minutes * 60) if contract.timeout_minutes else job.timeout
+        timer = threading.Timer(timeout, cancel.set) if timeout else None
         if timer:
             timer.start()
         try:

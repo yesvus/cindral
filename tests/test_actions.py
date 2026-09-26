@@ -84,7 +84,7 @@ jobs:
     def test_event_matching_for_push_and_pull_request(self) -> None:
         on_spec = {
             "push": {"branches": ["main", "feature/*"]},
-            "pull_request": {"branches": ["main"]},
+            "pull_request": {"branches": "main"},
             "workflow_dispatch": None,
         }
         self.assertTrue(event_matches(on_spec, "push", "refs/heads/main"))
@@ -92,14 +92,27 @@ jobs:
         self.assertFalse(event_matches(on_spec, "push", "refs/heads/bugfix/123"))
         self.assertFalse(event_matches(on_spec, "push", "refs/heads/other/merge"))
         self.assertTrue(event_matches(on_spec, "pull_request", "refs/pull/42/merge"))
+        self.assertFalse(event_matches(on_spec, "pull_request", "refs/pull/42/merge", base_ref="release"))
         self.assertTrue(event_matches(on_spec, "workflow_dispatch", "refs/heads/main"))
         self.assertFalse(event_matches(on_spec, "schedule", "refs/heads/main"))
 
     def test_tag_filtering_and_tag_only_workflows(self) -> None:
-        tag_spec = {"push": {"tags": ["v*"]}}
+        tag_spec = {"push": {"tags": "v*"}}
         self.assertTrue(event_matches(tag_spec, "push", "refs/tags/v1.0.0"))
         self.assertFalse(event_matches(tag_spec, "push", "refs/tags/release-1.0"))
         self.assertFalse(event_matches(tag_spec, "push", "refs/heads/main"))
+
+        tag_ignore_spec = {"push": {"tags-ignore": ["v*"]}}
+        self.assertTrue(event_matches(tag_ignore_spec, "push", "refs/tags/release-1.0"))
+        self.assertFalse(event_matches(tag_ignore_spec, "push", "refs/tags/v1.0.0"))
+        self.assertFalse(event_matches(tag_ignore_spec, "push", "refs/heads/main"))
+
+    def test_scalar_branch_and_tag_patterns(self) -> None:
+        spec = {"push": {"branches": "develop", "tags": "v*"}}
+        self.assertTrue(event_matches(spec, "push", "refs/heads/develop"))
+        self.assertFalse(event_matches(spec, "push", "refs/heads/main"))
+        self.assertTrue(event_matches(spec, "push", "refs/tags/v2.0"))
+        self.assertFalse(event_matches(spec, "push", "refs/tags/beta"))
 
     def test_workflow_to_contract_rejects_unsupported_runs_on(self) -> None:
         workflow_file = self.workflows_dir / "windows.yml"
@@ -130,7 +143,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: echo 1
-        if: failure()
+        if: always()
 """
         )
         wf = parse_workflow(workflow_file)
