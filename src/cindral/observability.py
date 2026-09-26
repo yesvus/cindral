@@ -10,7 +10,9 @@ METRICS_PATH = "/metrics"
 class ObservabilityMixin:
     """Handlers for the read-only pool and metrics surfaces.
 
-    ``/v1/pool`` carries lease and job detail behind the agent token.
+    ``/v1/pool`` takes the read-only pool token. The dispatch and agent tokens
+    are refused: they are different capabilities and must not widen into queue
+    visibility.
     ``/metrics`` is unauthenticated for Prometheus but stays same-origin, so a
     page a scraper visits cannot read pool state through the browser.
     """
@@ -18,10 +20,7 @@ class ObservabilityMixin:
     server: Any
 
     def _pool_authorized(self) -> bool:
-        # the pool snapshot carries lease and job detail, so it takes the agent
-        # token only; the dispatch token is a narrower credential and must not
-        # widen into pool visibility
-        return self._agent_authorized()  # type: ignore[attr-defined]
+        return self._token_authorized(self.server.pool_token)  # type: ignore[attr-defined]
 
     def do_OPTIONS(self) -> None:  # noqa: N802
         if self.path.split("?", 1)[0] != POOL_PATH:  # type: ignore[attr-defined]
@@ -44,7 +43,7 @@ class ObservabilityMixin:
             return
         if not self._pool_authorized():
             self._send(  # type: ignore[attr-defined]
-                401, {"error": "pool snapshot requires the agent bearer token"}
+                401, {"error": "pool snapshot requires the pool bearer token"}
             )
             return
         self._send(200, store.pool_snapshot(self.server.runners), cors=True)  # type: ignore[attr-defined]

@@ -22,6 +22,20 @@ run = "python -m unittest discover -s tests"
 [[steps]]
 run = "docker run --rm -v \"$PWD/web:/app\" -w /app node:22-bookworm sh -lc 'corepack enable && pnpm install --frozen-lockfile && pnpm run ci'"
 
+# The panel ships as a container, so the runtime image is built and booted here.
+# An import or runtime failure in the standalone server only surfaces once the
+# image actually starts. The probe runs inside the panel container, because this
+# step already runs inside the job container, where a published host port is not
+# reachable on 127.0.0.1.
+[[steps]]
+run = "docker build -t cindral-panel:ci web"
+
+[[steps]]
+run = "docker run -d --name cindral-panel-ci -e CINDRAL_PANEL_EMAIL=ci@example.com -e CINDRAL_PANEL_PASSWORD=ci -e CINDRAL_SESSION_SECRET=ci-secret cindral-panel:ci"
+
+[[steps]]
+run = "sleep 4 && docker exec cindral-panel-ci node -e \"fetch('http://127.0.0.1:3000/login').then(function(r){console.log('login',r.status);process.exit(r.ok?0:1)}).catch(function(e){console.error(e.message);process.exit(1)})\" && docker rm -f cindral-panel-ci"
+
 # Unit tests run against an editable install, so they cannot detect a
 # dependency the Dockerfile forgets to install. That only surfaces when the
 # built image imports the module, which is how a missing PyYAML reached a

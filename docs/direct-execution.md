@@ -86,6 +86,7 @@ The agent needs Docker and permission to read the repositories it runs.
 
 - `CINDRAL_JOBS_DB`: SQLite path; the queue stays off when unset.
 - `CINDRAL_AGENT_TOKEN`: bearer token agents present.
+- `CINDRAL_POOL_TOKEN`: read-only bearer token for `GET /v1/pool`.
 - `CINDRAL_JOB_LEASE_SECONDS`: lease duration, default `300`.
 - `CINDRAL_JOB_TIMEOUT`: per-job timeout, default `3600`.
 - `CINDRAL_DIRECT_REPOSITORIES`: comma-separated `owner/name` list.
@@ -98,13 +99,21 @@ expired lease returns the job to the queue for another device.
 
 | Endpoint | Auth | Content |
 | --- | --- | --- |
-| `GET /v1/pool` | agent bearer token | JSON pool snapshot: devices with their leases, queue depth, oldest pending age, expired lease count, reclaim total, recent jobs |
+| `GET /v1/pool` | `CINDRAL_POOL_TOKEN` | JSON pool snapshot: devices with their leases, queue depth, oldest pending age, expired lease count, reclaim total, recent jobs |
 | `GET /metrics` | none, same-origin only | Prometheus text for the same gauges |
 
-`/v1/pool` answers cross-origin preflight for the panel; the dispatch token is
-refused because it is a narrower credential than the agent token. `/metrics`
-carries no `Access-Control-Allow-Origin`, so a browser page a scraper visits
-cannot read pool state.
+`/v1/pool` answers cross-origin preflight for the panel. It takes the read-only
+pool token, not the agent token: a control panel that can read queue state
+should not hold the credential that can claim, renew, and report jobs. The
+agent and dispatch tokens are both refused, and an unset pool token refuses
+every request rather than serving the snapshot open. The broker also refuses to
+start when the pool token equals the agent or dispatch token, since a shared
+value would hand the read-only consumer the write capability. `/metrics` carries
+no `Access-Control-Allow-Origin`, so a browser page a scraper visits cannot read
+pool state.
+
+The pool token is also accepted on `GET /v1/jobs/{id}` so a panel can read a
+single run. `claim`, `renew`, and `report` still take the agent token only.
 
 An expired lease is counted as pending rather than running, and reported
 separately as `expired_lease_count` / `cindral_expired_leases`. Both endpoints
@@ -119,10 +128,14 @@ the snapshot server-side and renders Overview, Devices, and Queue views.
 | Variable | Meaning |
 | --- | --- |
 | `CINDRAL_API_URL` | broker base URL, default `http://127.0.0.1:8095` |
-| `CINDRAL_AGENT_TOKEN` | token the panel presents to the broker |
-| `CINDRAL_CONTROL_PANEL_TOKEN` | token an operator must present to the panel; unset means every request is refused |
+| `CINDRAL_POOL_TOKEN` | read-only token the panel presents to the broker |
+| `CINDRAL_PANEL_PASSWORD` | operator password for the panel login; unset means every login is refused |
+| `CINDRAL_PANEL_EMAIL` | email shown on the login form and the session |
+| `CINDRAL_SESSION_SECRET` | signs the session cookie |
 | `CINDRAL_API_TIMEOUT_MS` | broker request timeout, default `5000` |
 
-The panel holds the agent token server-side, so it requires
-`CINDRAL_CONTROL_PANEL_TOKEN` from the caller before rendering any lease or CI
-log data. Without it, requests are refused rather than served open.
+The panel is a single-operator surface: one password and a signed session
+cookie, with no user database. The broker credential it holds is the read-only
+pool token, so a compromised panel cannot claim or report jobs. An unset
+password, session secret, or operator email refuses logins rather than serving
+the panel open, and failed sign-ins are throttled per client.

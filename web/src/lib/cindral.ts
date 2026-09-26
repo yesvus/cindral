@@ -57,7 +57,9 @@ const BROKER_URL = (process.env.CINDRAL_API_URL || "http://127.0.0.1:8095").repl
   /\/+$/,
   ""
 );
-const AGENT_TOKEN = process.env.CINDRAL_AGENT_TOKEN || "";
+// read-only credential: the panel must not hold the token that can claim and
+// report jobs on the device pool
+const POOL_TOKEN = process.env.CINDRAL_POOL_TOKEN || "";
 // fail fast instead of pinning a request worker when the broker stops responding
 const REQUEST_TIMEOUT_MS = Number(process.env.CINDRAL_API_TIMEOUT_MS || 5000);
 
@@ -74,8 +76,8 @@ export class BrokerError extends Error {
 
 async function brokerFetch(path: string): Promise<Response> {
   const headers: Record<string, string> = { Accept: "application/json" };
-  if (AGENT_TOKEN) {
-    headers.Authorization = `Bearer ${AGENT_TOKEN}`;
+  if (POOL_TOKEN) {
+    headers.Authorization = `Bearer ${POOL_TOKEN}`;
   }
   return fetch(`${BROKER_URL}${path}`, {
     headers,
@@ -92,7 +94,10 @@ export async function getPoolSnapshot(): Promise<PoolSnapshot> {
     throw new BrokerError("unavailable", "the Cindral broker did not respond");
   }
   if (res.status === 401 || res.status === 403) {
-    throw new BrokerError("unauthorized", "the broker rejected the agent token");
+    throw new BrokerError(
+      "unauthorized",
+      "the broker rejected the pool credential; check CINDRAL_POOL_TOKEN",
+    );
   }
   if (!res.ok) {
     throw new BrokerError("unavailable", `the broker returned ${res.status}`);
@@ -108,7 +113,10 @@ export async function getJob(id: string): Promise<JobInfo> {
     throw new BrokerError("unavailable", "the Cindral broker did not respond");
   }
   if (res.status === 401 || res.status === 403) {
-    throw new BrokerError("unauthorized", "the broker rejected the agent token");
+    throw new BrokerError(
+      "unauthorized",
+      "the broker rejected the pool credential; check CINDRAL_POOL_TOKEN",
+    );
   }
   if (res.status === 404) {
     throw new BrokerError("unavailable", "job not found");

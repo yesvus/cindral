@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
-import { panelAuthorized, unauthorized } from "@/lib/auth";
+import { withSession } from "@/lib/guard";
 import { BrokerError, getPoolSnapshot } from "@/lib/cindral";
 
-export async function GET(request: Request) {
-  if (!panelAuthorized(request)) {
-    return unauthorized();
+export async function GET() {
+  const guard = await withSession();
+  if ("response" in guard) {
+    return guard.response;
   }
   try {
     return NextResponse.json(await getPoolSnapshot());

@@ -44,6 +44,9 @@ class CindralServer(ThreadingHTTPServer):
     reservation_seconds: int
     jobs: JobStore | None = None
     agent_token: str | None = None
+    # read-only credential for /v1/pool, so a control panel can inspect the
+    # queue without holding the agent token that can claim and report jobs
+    pool_token: str | None = None
     lease_seconds: int = 300
     job_timeout: int = 3600
     direct_repositories: tuple[str, ...] = ()
@@ -283,11 +286,13 @@ class CindralHandler(JobApiMixin, ObservabilityMixin, BaseHTTPRequestHandler):
             if not reservations:
                 self.server.runner_reservations.pop(repository, None)
 
-    def _dispatch_authorized(self) -> bool:
-        expected = self.server.dispatch_token
+    def _token_authorized(self, expected: str | None) -> bool:
+        """Constant-time bearer check against one configured token.
+
+        An unset token refuses rather than matching, so a missing secret can
+        never silently open the path it guards.
+        """
         if not expected:
-            # no token configured means dispatch is refused rather than open,
-            # so an unset secret cannot silently expose the endpoint
             return False
         header = self.headers.get("Authorization", "")
         prefix = "Bearer "
@@ -295,15 +300,11 @@ class CindralHandler(JobApiMixin, ObservabilityMixin, BaseHTTPRequestHandler):
             return False
         return hmac.compare_digest(header[len(prefix):].strip(), expected)
 
+    def _dispatch_authorized(self) -> bool:
+        return self._token_authorized(self.server.dispatch_token)
+
     def _agent_authorized(self) -> bool:
-        expected = self.server.agent_token
-        if not expected:
-            return False
-        header = self.headers.get("Authorization", "")
-        prefix = "Bearer "
-        if not header.startswith(prefix):
-            return False
-        return hmac.compare_digest(header[len(prefix):].strip(), expected)
+        return self._token_authorized(self.server.agent_token)
 
     def _read_json(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0") or 0)
@@ -567,6 +568,15 @@ def serve(policy_path: str | Path, state_path: str | Path, host: str, port: int,
     jobs_db = os.environ.get("CINDRAL_JOBS_DB")
     server.jobs = JobStore(jobs_db) if jobs_db else None
     server.agent_token = os.environ.get("CINDRAL_AGENT_TOKEN") or None
+    server.pool_token = os.environ.get("CINDRAL_POOL_TOKEN") or None
+    if server.pool_token and server.pool_token in {
+        server.agent_token,
+        server.dispatch_token,
+    }:
+        # sharing a value would hand the read-only consumer the write capability
+        raise ValueError(
+            "CINDRAL_POOL_TOKEN must differ from CINDRAL_AGENT_TOKEN and CINDRAL_DISPATCH_TOKEN"
+        )
     server.lease_seconds = int(os.environ.get("CINDRAL_JOB_LEASE_SECONDS", "300"))
     server.job_timeout = int(os.environ.get("CINDRAL_JOB_TIMEOUT", "3600"))
     server.direct_repositories = tuple(
@@ -582,6 +592,8 @@ def serve(policy_path: str | Path, state_path: str | Path, host: str, port: int,
         print("warning: CINDRAL_DISPATCH_TOKEN is unset, /v1/dispatch will refuse every request")
     if server.jobs is not None and not server.agent_token:
         print("warning: CINDRAL_JOBS_DB is set but CINDRAL_AGENT_TOKEN is unset, /v1/jobs will refuse every request")
+    if server.jobs is not None and not server.pool_token:
+        print("warning: CINDRAL_JOBS_DB is set but CINDRAL_POOL_TOKEN is unset, /v1/pool will refuse every request")
     try:
         server.serve_forever()
     finally:
