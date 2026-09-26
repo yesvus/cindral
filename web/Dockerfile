@@ -21,6 +21,10 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
+# Docker injects HOSTNAME as the container ID, and the standalone server binds
+# to process.env.HOSTNAME, so without this it listens on the container address
+# instead of every interface and a Service cannot reach it
+ENV HOSTNAME=0.0.0.0
 # The runner is a non-root user, and the panel holds no writable state: the
 # broker owns the queue and the session is a signed cookie.
 RUN groupadd --system --gid 10001 cindral \

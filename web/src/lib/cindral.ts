@@ -94,7 +94,10 @@ export async function getPoolSnapshot(): Promise<PoolSnapshot> {
     throw new BrokerError("unavailable", "the Cindral broker did not respond");
   }
   if (res.status === 401 || res.status === 403) {
-    throw new BrokerError("unauthorized", "the broker rejected the agent token");
+    throw new BrokerError(
+      "unauthorized",
+      "the broker rejected the pool credential; check CINDRAL_POOL_TOKEN",
+    );
   }
   if (!res.ok) {
     throw new BrokerError("unavailable", `the broker returned ${res.status}`);
@@ -110,7 +113,10 @@ export async function getJob(id: string): Promise<JobInfo> {
     throw new BrokerError("unavailable", "the Cindral broker did not respond");
   }
   if (res.status === 401 || res.status === 403) {
-    throw new BrokerError("unauthorized", "the broker rejected the agent token");
+    throw new BrokerError(
+      "unauthorized",
+      "the broker rejected the pool credential; check CINDRAL_POOL_TOKEN",
+    );
   }
   if (res.status === 404) {
     throw new BrokerError("unavailable", "job not found");

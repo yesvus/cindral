@@ -7,19 +7,34 @@ from .jobs import JobStore
 
 
 class JobApiMixin:
-    """Handlers for ``/v1/jobs``, gated behind the agent bearer token."""
+    """Handlers for ``/v1/jobs``.
+
+    Claim, renew, and report mutate the queue and take the agent token. Reading
+    one job's status also takes the read-only pool token, so a control panel can
+    inspect a run without holding the credential that can lease work.
+    """
 
     server: Any
+
+    def _read_authorized(self) -> bool:
+        return self._agent_authorized() or self._pool_authorized()  # type: ignore[attr-defined]
 
     def _jobs(self) -> None:
         store = self.server.jobs
         if store is None:
             self._send(503, {"error": "job queue is not configured"})  # type: ignore[attr-defined]
             return
-        if not self._agent_authorized():  # type: ignore[attr-defined]
-            self._send(401, {"error": "job requests require a bearer token"})  # type: ignore[attr-defined]
-            return
         path = self.path.split("?", 1)[0].rstrip("/")  # type: ignore[attr-defined]
+        # only the status lookup is read-only; everything else mutates the queue
+        read_only = not path.endswith(("/claim", "/renew", "/report"))
+        authorized = (  # type: ignore[attr-defined]
+            self._read_authorized() if read_only else self._agent_authorized()
+        )
+        if not authorized:
+            self._send(  # type: ignore[attr-defined]
+                401, {"error": "job requests require a bearer token"}
+            )
+            return
         method = self.command  # type: ignore[attr-defined]
         try:
             if path == "/v1/jobs/claim":

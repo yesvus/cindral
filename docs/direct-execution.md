@@ -106,9 +106,14 @@ expired lease returns the job to the queue for another device.
 pool token, not the agent token: a control panel that can read queue state
 should not hold the credential that can claim, renew, and report jobs. The
 agent and dispatch tokens are both refused, and an unset pool token refuses
-every request rather than serving the snapshot open. `/metrics` carries no
-`Access-Control-Allow-Origin`, so a browser page a scraper visits cannot read
+every request rather than serving the snapshot open. The broker also refuses to
+start when the pool token equals the agent or dispatch token, since a shared
+value would hand the read-only consumer the write capability. `/metrics` carries
+no `Access-Control-Allow-Origin`, so a browser page a scraper visits cannot read
 pool state.
+
+The pool token is also accepted on `GET /v1/jobs/{id}` so a panel can read a
+single run. `claim`, `renew`, and `report` still take the agent token only.
 
 An expired lease is counted as pending rather than running, and reported
 separately as `expired_lease_count` / `cindral_expired_leases`. Both endpoints
@@ -132,4 +137,5 @@ the snapshot server-side and renders Overview, Devices, and Queue views.
 The panel is a single-operator surface: one password and a signed session
 cookie, with no user database. The broker credential it holds is the read-only
 pool token, so a compromised panel cannot claim or report jobs. An unset
-password or session secret refuses logins rather than serving the panel open.
+password, session secret, or operator email refuses logins rather than serving
+the panel open, and failed sign-ins are throttled per client.

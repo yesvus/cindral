@@ -6,6 +6,7 @@ from http.client import HTTPConnection
 from pathlib import Path
 from unittest.mock import patch
 
+from cindral import jobs
 from cindral.github import RepositoryRunner
 from cindral.jobs import JobStore
 from cindral.policy import Policy
@@ -304,6 +305,41 @@ class JobEndpointTest(unittest.TestCase):
         # an unset secret must not silently expose the snapshot
         self.server.pool_token = None
         status, _ = self.call("GET", "/v1/pool", token=POOL_TOKEN)
+        self.assertEqual(status, 401)
+
+    def test_job_status_accepts_the_read_only_token(self) -> None:
+        # the panel holds only the pool token, so it must be able to read a run
+        job = self.server.jobs.enqueue("example-org/app", "sha1", "main", command=("ci",))
+        status, payload = self.call("GET", f"/v1/jobs/{job.id}", token=POOL_TOKEN)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["id"], job.id)
+
+    def test_claim_refuses_the_read_only_token(self) -> None:
+        self.server.jobs.enqueue("example-org/app", "sha1", "main", command=("ci",))
+        status, _ = self.call(
+            "POST", "/v1/jobs/claim", {"device": "server"}, token=POOL_TOKEN
+        )
+        self.assertEqual(status, 401)
+        self.assertEqual(self.server.jobs.list(jobs.RUNNING), [])
+
+    def test_report_refuses_the_read_only_token(self) -> None:
+        job = self.server.jobs.enqueue("example-org/app", "sha1", "main", command=("ci",))
+        self.server.jobs.claim("server", [])
+        status, _ = self.call(
+            "POST",
+            f"/v1/jobs/{job.id}/report",
+            {"device": "server", "exit_code": 0},
+            token=POOL_TOKEN,
+        )
+        self.assertEqual(status, 401)
+        self.assertEqual(self.server.jobs.get(job.id).status, "running")
+
+    def test_renew_refuses_the_read_only_token(self) -> None:
+        job = self.server.jobs.enqueue("example-org/app", "sha1", "main", command=("ci",))
+        self.server.jobs.claim("server", [])
+        status, _ = self.call(
+            "POST", f"/v1/jobs/{job.id}/renew", {"device": "server"}, token=POOL_TOKEN
+        )
         self.assertEqual(status, 401)
 
     def test_metrics_is_not_readable_cross_origin(self) -> None:

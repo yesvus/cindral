@@ -11,7 +11,7 @@ const SESSION_TTL_SECONDS = 60 * 60 * 12;
 
 export const panelEmail = EMAIL;
 
-function configured(): boolean {
+export function authConfigured(): boolean {
   return Boolean(PASSWORD && SESSION_SECRET && EMAIL);
 }
 
@@ -27,7 +27,7 @@ function sign(payload: string): string {
 
 /** Mint a session cookie value. Returns null when auth is not configured. */
 export function createSession(): string | null {
-  if (!configured()) {
+  if (!authConfigured()) {
     return null;
   }
   const expires = Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS;
@@ -38,7 +38,7 @@ export function createSession(): string | null {
 }
 
 export function verifySession(value: string | undefined): boolean {
-  if (!configured() || !value) {
+  if (!authConfigured() || !value) {
     return false;
   }
   const [payload, signature] = value.split(".");
@@ -56,11 +56,11 @@ export function verifySession(value: string | undefined): boolean {
 export function checkPassword(candidate: string): boolean {
   // refuse rather than fall through when unconfigured, so a missing secret
   // cannot leave the panel open to an empty password
-  return configured() && safeEqual(candidate, PASSWORD);
+  return authConfigured() && safeEqual(candidate, PASSWORD);
 }
 
 export function checkEmail(candidate: string): boolean {
-  return configured() && safeEqual(candidate.trim().toLowerCase(), EMAIL.toLowerCase());
+  return authConfigured() && safeEqual(candidate.trim().toLowerCase(), EMAIL.toLowerCase());
 }
 
 export async function currentSessionEmail(): Promise<string | null> {

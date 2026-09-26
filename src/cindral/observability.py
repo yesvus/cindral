@@ -1,5 +1,4 @@
 """Pool snapshot and metrics endpoints for the control panel and scrapers."""
-import hmac
 from typing import Any
 
 from .pool import render_metrics
@@ -21,16 +20,7 @@ class ObservabilityMixin:
     server: Any
 
     def _pool_authorized(self) -> bool:
-        expected = self.server.pool_token
-        if not expected:
-            # no pool token configured means the snapshot is refused rather
-            # than open, so an unset secret cannot silently expose it
-            return False
-        header = self.headers.get("Authorization", "")  # type: ignore[attr-defined]
-        prefix = "Bearer "
-        if not header.startswith(prefix):
-            return False
-        return hmac.compare_digest(header[len(prefix):].strip(), expected)
+        return self._token_authorized(self.server.pool_token)  # type: ignore[attr-defined]
 
     def do_OPTIONS(self) -> None:  # noqa: N802
         if self.path.split("?", 1)[0] != POOL_PATH:  # type: ignore[attr-defined]
