@@ -1,0 +1,53 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+  --admin-surface: #ffffff;
+  --admin-surface-muted: #f4f4f5;
+  --admin-surface-subtle: #fafafa;
+  --admin-border: #e4e4e7;
+  --admin-text-primary: #18181b;
+  --admin-text-secondary: #52525b;
+  --admin-text-muted: #71717a;
+  --admin-text-disabled: #a1a1aa;
+  --admin-danger-text: #b91c1c;
+  --admin-warning-text: #92400e;
+  --admin-warning-surface: #fffbeb;
+  --admin-warning-border: #fcd34d;
+}
+
+[data-admin-theme="dark"] {
+  color-scheme: dark;
+  --admin-surface: #18181b;
+  --admin-surface-muted: #27272a;
+  --admin-surface-subtle: #09090b;
+  --admin-border: #3f3f46;
+  --admin-text-primary: #fafafa;
+  --admin-text-secondary: #d4d4d8;
+  --admin-text-muted: #a1a1aa;
+  --admin-text-disabled: #71717a;
+  --admin-danger-text: #fca5a5;
+  --admin-warning-text: #fcd34d;
+  --admin-warning-surface: #422006;
+  --admin-warning-border: #a16207;
+}
+
+/* The package remaps its text and feedback tokens onto the zinc scale so its own
+   components can use neutral utility names, which leaves the semantic names
+   unavailable as utilities. Pages read better against the named tokens, so
+   expose the remaining ones under their own names. The values stay in the
+   package stylesheet; only the utility names are added here. */
+@theme inline {
+  --color-admin-surface: var(--admin-surface);
+  --color-admin-surface-muted: var(--admin-surface-muted);
+  --color-admin-surface-subtle: var(--admin-surface-subtle);
+  --color-admin-border: var(--admin-border);
+  --color-admin-text-primary: var(--admin-text-primary);
+  --color-admin-text-secondary: var(--admin-text-secondary);
+  --color-admin-text-muted: var(--admin-text-muted);
+  --color-admin-text-disabled: var(--admin-text-disabled);
+  --color-admin-warning-text: var(--admin-warning-text);
+  --color-admin-warning-surface: var(--admin-warning-surface);
+  --color-admin-warning-border: var(--admin-warning-border);
+  --color-admin-danger-text: var(--admin-danger-text);
+}

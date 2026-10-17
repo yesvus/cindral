@@ -1,0 +1,49 @@
+name: Bug report
+description: Something is not working
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Repro steps
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / metrics
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Cindral version or commit
+      placeholder: 0.1.0 or a commit SHA
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include relevant runner, GitHub Actions, or deployment details.
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: "P0: data loss/production down. P1: high-impact or user-facing. P2: normal. P3: low."
+      options:
+        - P0
+        - P1
+        - P2
+        - P3
+    validations:
+      required: true

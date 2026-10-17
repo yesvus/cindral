@@ -1,0 +1,36 @@
+[project]
+name = "cindral"
+dynamic = ["version"]
+description = "Quota-aware GitHub Actions routing across hosted and self-hosted runners."
+requires-python = ">=3.12"
+dependencies = [
+    "cryptography>=42,<47",
+    "PyYAML>=6.0,<7",
+]
+
+[project.scripts]
+cindral = "cindral.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# The version is read from VERSION rather than typed here, because two places that
+# must be edited together will drift: they had, and three releases shipped with
+# the two disagreeing. The file is the same one the runtime reads at /healthz, so
+# what a build reports and what an installed package declares cannot differ. The
+# leading v is stripped by the pattern, so VERSION stays the one spelling a person
+# writes and the tag a release cuts.
+[tool.hatch.version]
+path = "VERSION"
+pattern = "v?(?P<version>.+)"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cindral"]
+
+[tool.cindral.code_quality]
+max_lines_src = 400
+max_lines_test = 650
+baseline_overrides = { "src/cindral/service.py" = 700, "src/cindral/executor.py" = 415, "src/cindral/github.py" = 430 }
+
+

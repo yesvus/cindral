@@ -1,0 +1,40 @@
+# The act engine runs a workflow job's steps in containers it creates, so a device
+# needs this image before it can take a job that names an action.
+#
+# It is a separate file rather than a stage in the main Dockerfile on purpose. The
+# main image is built with the legacy `docker build`, which executes every stage
+# in order, so an act stage in that file would download and verify act on every
+# build of the broker and panel images. Nothing in the main image needs act.
+#
+# The release and the SHA-256 digests act publishes are pinned here, the only
+# place the version is written down: src/cindral/act.py names the image this file
+# builds, a test fails if the two drift, and nothing downloads act at job time.
+#
+#   docker build -f Dockerfile.act -t cindral-act:0.2.89 .
+ARG ACT_VERSION=0.2.89
+ARG ACT_SHA256_AMD64=0191d6f1f3b716b5c55820032605d05fc3c1cdbf581ebeff655019e5dd1524c0
+ARG ACT_SHA256_ARM64=daa8679ba9615a74d2d0cec321dc593f21948a2a11bb65862b063d8b930f4bcb
+
+FROM python:3.12-slim
+ARG ACT_VERSION
+ARG ACT_SHA256_AMD64
+ARG ACT_SHA256_ARM64
+# The architecture comes from the base image rather than from TARGETARCH, which
+# only BuildKit sets. The Cindral contract builds with the legacy `docker build`,
+# and an unset TARGETARCH under `set -eu` fails the step before it downloads
+# anything. dpkg reports the same amd64/arm64 names act publishes its tarballs
+# under.
+# python:3.12-slim is the pinned base the main image uses, and it carries the CA
+# bundle act needs to reach github.com for the actions a job names.
+RUN set -eu; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) archive=act_Linux_x86_64.tar.gz; expected="$ACT_SHA256_AMD64" ;; \
+      arm64) archive=act_Linux_arm64.tar.gz; expected="$ACT_SHA256_ARM64" ;; \
+      *) echo "no pinned act build for this architecture" >&2; exit 1 ;; \
+    esac; \
+    python3 -c "import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" \
+      "https://github.com/nektos/act/releases/download/v${ACT_VERSION}/${archive}" /tmp/act.tar.gz; \
+    echo "${expected}  /tmp/act.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/act.tar.gz -C /usr/local/bin act; \
+    rm /tmp/act.tar.gz; \
+    act --version

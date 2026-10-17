@@ -1,0 +1,115 @@
+name: cindral-dispatch
+
+on:
+  workflow_dispatch:
+    inputs:
+      cindral_lane:
+        required: true
+        type: choice
+        options:
+          - hosted
+          - fallback
+          - device
+          - burst
+      cindral_target:
+        required: false
+        type: string
+        default: ""
+      cindral_reason:
+        required: false
+        type: string
+        default: ""
+      cindral_ref:
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cindral-${{ github.workflow }}-${{ inputs.cindral_ref || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  hosted:
+    if: inputs.cindral_lane == 'hosted'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.cindral_ref || github.ref }}
+      - run: ./scripts/ci
+      # The same directory the device pool archives, so a repository that
+      # writes .cindral/artifacts/ keeps its output whichever lane ran it.
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('.cindral/artifacts/**') != ''
+        with:
+          name: artifacts-${{ github.run_id }}-${{ github.job }}
+          path: .cindral/artifacts
+          if-no-files-found: ignore
+
+  fallback:
+    if: inputs.cindral_lane == 'fallback'
+    # The custom label keeps device-only runners out of the fallback lane.
+    runs-on: [self-hosted, Linux, ARM64, fallback]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.cindral_ref || github.ref }}
+      - run: ./scripts/ci
+      # The same directory the device pool archives, so a repository that
+      # writes .cindral/artifacts/ keeps its output whichever lane ran it.
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('.cindral/artifacts/**') != ''
+        with:
+          name: artifacts-${{ github.run_id }}-${{ github.job }}
+          path: .cindral/artifacts
+          if-no-files-found: ignore
+
+  device:
+    if: inputs.cindral_lane == 'device'
+    # Selected by runner name, which is the label GitHub registers each device
+    # with, so no class label is needed.
+    #
+    # The condition names no target, because the label below already is the
+    # selection: a device runs this job only if it advertises the target the broker
+    # chose. Enumerating names here instead would duplicate a guarantee the runner
+    # makes, and would bind the shipped template to three device names that no
+    # policy configures -- which is why onboarding failed closed against every real
+    # deployment.
+    runs-on: [self-hosted, Linux, ARM64, "${{ inputs.cindral_target }}"]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.cindral_ref || github.ref }}
+      - run: ./scripts/ci
+      # The same directory the device pool archives, so a repository that
+      # writes .cindral/artifacts/ keeps its output whichever lane ran it.
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('.cindral/artifacts/**') != ''
+        with:
+          name: artifacts-${{ github.run_id }}-${{ github.job }}
+          path: .cindral/artifacts
+          if-no-files-found: ignore
+
+  burst:
+    if: inputs.cindral_lane == 'burst'
+    runs-on: [self-hosted, Linux, ARM64, burst]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.cindral_ref || github.ref }}
+      - run: ./scripts/ci
+      # The same directory the device pool archives, so a repository that
+      # writes .cindral/artifacts/ keeps its output whichever lane ran it.
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('.cindral/artifacts/**') != ''
+        with:
+          name: artifacts-${{ github.run_id }}-${{ github.job }}
+          path: .cindral/artifacts
+          if-no-files-found: ignore

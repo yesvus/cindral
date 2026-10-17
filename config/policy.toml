@@ -1,0 +1,40 @@
+[hosted]
+runner = "ubuntu-24.04"
+
+[quota]
+minimum_remaining_minutes = 20
+reserve_minutes = 10
+paid_overage = "deny"
+unknown_quota = "local"
+
+[local]
+priority = ["fallback"]
+device_priority = ["desktop", "laptop", "phone"]
+
+# Fallback requires its own custom label so GitHub cannot assign this lane to a
+# runner registered only for a device target.
+[lanes.fallback]
+labels = ["self-hosted", "Linux", "ARM64", "fallback"]
+
+# Device lanes are selected by target, so the runner name is appended per request.
+[lanes.device]
+labels = ["self-hosted", "Linux", "ARM64"]
+
+[lanes.burst]
+labels = ["self-hosted", "Linux", "ARM64", "burst"]
+
+# Repositories the broker serves, with the path each one is served on. `mode` is
+# required and is one of "dispatch" (POST /v1/dispatch may target it), "device"
+# (its trusted push and same-repository pull request events run on a device), or
+# "both". `workflows` and `refs` constrain the dispatch path. The entry below
+# names the example repository, so a deployment mounts its own policy with its
+# own repositories. An absent or empty list serves nothing on either path.
+[[dispatch.repositories]]
+mode = "both"
+# A push lane may be "hosted" (the default: GitHub's runners first, the device
+# pool on refusal), "device" (the local pool), or "auto" (let the policy decide,
+# which is the local pool when hosted quota is unknown).
+push_lane = "auto"
+repository = "example-org/example-app"
+workflows = ["cindral-dispatch.yml"]
+refs = ["refs/heads/main"]

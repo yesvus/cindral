@@ -1,0 +1,89 @@
+# This repository runs its CI from here, not from `.github/workflows/ci.yml`.
+#
+# A committed workflow is read first (#145), and that is the right default. It
+# does not apply here for two reasons. `ci.yml` is `workflow_dispatch`-only, so
+# it matches no push and no pull request. And what this file carries is what no
+# single translatable workflow job expresses: `[runner] docker = true`, a
+# service network, and panel steps that build and drive a `node:22` container
+# over the Docker socket, which need a host daemon the job's own container
+# cannot provide.
+#
+# `ci.yml` is kept because it is the dispatch adapter, which is what the broker
+# `workflow_dispatch`es a lane through, and that path needs a real Actions
+# workflow with one job per lane. It is not this repository's CI definition.
+#
+# `[ci] contract_only` below is what makes that true mechanically. Two workflow
+# files also trigger on push, `publish-broker.yml` and `publish-panel.yml`, and
+# the resolver has no way to tell a release workflow from a CI workflow, so a
+# push matched two jobs and failed as ambiguous. That ambiguity is a plain
+# WorkflowError, which no fallback catches, so the push died before reaching
+# this file. Declaring the contract authoritative skips workflow resolution
+# entirely instead of trying to out-argue it. See #159.
+[ci]
+contract_only = true
+
+[image]
+ref = "python:3.12-bookworm"
+
+[runner]
+docker = true
+
+[[steps]]
+run = "pip install --quiet -e ."
+
+[[steps]]
+run = "python scripts/check.py"
+
+# The control panel is a separate toolchain, so it is checked in a node
+# container against the daemon this contract already mounts. The sources are
+# copied in rather than bind-mounted: a -v source is resolved by the daemon on
+# the host, not inside this container, so an in-container path silently mounts
+# an empty directory and pnpm reports a missing lockfile.
+[[steps]]
+run = "docker rm -f cindral-panel-ci-node >/dev/null 2>&1 || true; docker create --name cindral-panel-ci-node -w /app node:22-bookworm sh -lc 'corepack enable && pnpm install --frozen-lockfile && pnpm run ci' >/dev/null && docker cp web/. cindral-panel-ci-node:/app && docker start -a cindral-panel-ci-node"
+
+# The panel ships as a container, so the runtime image is built and booted here.
+# An import or runtime failure in the standalone server only surfaces once the
+# image actually starts. The probe runs inside the panel container, because this
+# step already runs inside the job container, where a published host port is not
+# reachable on 127.0.0.1.
+[[steps]]
+run = "docker build -t cindral-panel:ci web"
+
+[[steps]]
+run = "docker network rm cindral-panel-ci-net >/dev/null 2>&1 || true; docker network create cindral-panel-ci-net"
+
+# A stub broker that returns a real snapshot. The signed-in pages only build
+# their tables when the snapshot has devices and jobs, so pointing the panel at
+# a dead broker would pass even with a broken page.
+[[steps]]
+run = "docker rm -f cindral-panel-ci-broker >/dev/null 2>&1 || true; docker run -d --name cindral-panel-ci-broker --network cindral-panel-ci-net --network-alias broker node:22-bookworm node -e \"require('http').createServer((q,s)=>{s.setHeader('content-type','application/json');s.end(JSON.stringify({devices:[{name:'ci-device',status:'online',healthy:true,busy:false,labels:['linux'],current_lease:null,leases:[]}],queue_depth:{pending:1,running:0,success:2,failure:0},expired_lease_count:0,oldest_pending_age_seconds:5,reclaim_count:0,success_count:2,failure_count:0,recent_jobs:[{id:'a'.repeat(32),repository:'org/app',sha:'b'.repeat(40),ref:'main',command:['ci'],labels:[],timeout:60,status:'success',device:'ci-device',exit_code:0,attempts:1,status_sha:null,log:'ok'}]}))}).listen(8095)\""
+
+[[steps]]
+run = "docker rm -f cindral-panel-ci >/dev/null 2>&1 || true; docker run -d --name cindral-panel-ci --network cindral-panel-ci-net -e CINDRAL_PANEL_EMAIL=ci@example.com -e CINDRAL_PANEL_PASSWORD=ci -e CINDRAL_SESSION_SECRET=ci-secret-long-enough-to-sign -e CINDRAL_POOL_TOKEN=ci-pool -e CINDRAL_API_URL=http://broker:8095 cindral-panel:ci"
+
+# The cookie is minted the way the panel mints it: the session id is the second the
+# session lapses, and the value is that id signed with the secret. A cookie of any other
+# shape is refused before the panel reads anything, so a probe carrying the wrong shape
+# fails here rather than passing against a page that renders anyway.
+[[steps]]
+run = "sleep 4 && docker exec cindral-panel-ci node -e \"var c=require('crypto');var id=String(Math.floor(Date.now()/1000)+600);var v=id+'.'+c.createHmac('sha256','ci-secret-long-enough-to-sign').update(id).digest('base64url');var pages=['/','/devices','/jobs'];Promise.all(pages.map(function(p){return fetch('http://127.0.0.1:3000'+p,{redirect:'manual',headers:{cookie:'cindral_session='+v}}).then(function(r){console.log(p,r.status);return r.status===200})})).then(function(ok){process.exit(ok.every(Boolean)?0:1)}).catch(function(e){console.error(e.message);process.exit(1)})\""
+
+[[steps]]
+run = "! docker logs cindral-panel-ci 2>&1 | grep -q 'Functions cannot be passed' || { echo 'panel pages failed to render'; false; }"
+
+[[steps]]
+run = "docker rm -f cindral-panel-ci cindral-panel-ci-broker cindral-panel-ci-node; docker network rm cindral-panel-ci-net"
+
+# Unit tests run against an editable install, so they cannot detect a
+# dependency the Dockerfile forgets to install. That only surfaces when the
+# built image imports the module, which is how a missing PyYAML reached a
+# pushed tag while every test passed.
+[[steps]]
+run = "docker build -t cindral:ci ."
+
+[[steps]]
+run = "docker run --rm cindral:ci --help"
+
+[[steps]]
+run = "docker run --rm --entrypoint python cindral:ci -c \"import cindral.onboarding\""

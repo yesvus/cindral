@@ -1,0 +1,95 @@
+name: publish-broker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "Dockerfile"
+      - "config/**"
+      - "examples/**"
+      - "pyproject.toml"
+      - "VERSION"
+      - ".github/workflows/publish-broker.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    # The arm64 half of the build runs under emulation, which is slower than a
+    # native build of the same Dockerfile
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - id: version
+        run: |
+          version=$(tr -d 'v\n' < VERSION)
+          # The tag carries the commit, so every published name identifies one
+          # build. A bare version tag repoints on every publish, which makes it
+          # look like a release and answer "what is 0.12.0" with "whatever ran
+          # last". The cluster pins a digest, so nothing needs the moving name.
+          echo "tag=${version}-${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          # when the image is built, not a repository field: the two drift, and
+          # a repository timestamp answers a question nobody asked
+          echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      # The cluster node is arm64 while this runner is amd64, so the foreign
+      # architecture is built under emulation. Without both of these the pushed
+      # image carries only the runner's platform and the cluster cannot pull it.
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          # GITHUB_TOKEN is refused on a package not linked to this repository
+          password: ${{ secrets.GHCR_TOKEN }}
+      # Both tags carry the commit and neither moves: one is readable
+      # (0.12.0-acb2a22) and one is the sha. There is deliberately no bare
+      # version tag, because a name that repoints is a name that cannot be
+      # checked. Ops pins a digest, so a rebuild that changed nothing under src/
+      # resolves to the same digest and does not trigger a rollout.
+      #
+      # The checks below read the same immutable tag this pushes, so the
+      # architecture check and the import smoke test verify the name an operator
+      # would pull rather than a second name that exists only inside this job.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/cindral:${{ steps.version.outputs.tag }}
+            ghcr.io/${{ github.repository_owner }}/cindral:${{ github.sha }}
+          # the broker reports these on /healthz and /metrics, so a panel and a
+          # dashboard can name the build they are talking to
+          build-args: |
+            CINDRAL_VERSION=${{ steps.version.outputs.version }}
+            CINDRAL_COMMIT=${{ github.sha }}
+            CINDRAL_BUILT_AT=${{ steps.version.outputs.built_at }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # A digest that resolves in the registry can still have no entry for the
+      # cluster's architecture, and a pin to it takes the broker down on rollout.
+      # Fail here instead, where the image is not yet referenced by anything.
+      - name: Check the published image runs on both architectures
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${{ github.repository_owner }}/cindral:${{ steps.version.outputs.tag }}"
+          found=$(docker buildx imagetools inspect "$image" --raw \
+            | jq -r '.manifests[].platform.architecture' | sort -u | tr '\n' ' ')
+          echo "published architectures: $found"
+          for arch in amd64 arm64; do
+            case " $found " in
+              *" $arch "*) ;;
+              *) echo "::error::published image has no $arch manifest"; exit 1 ;;
+            esac
+          done
+      # A build that cannot import its own module would roll out a broken image
+      - run: docker run --rm ghcr.io/${{ github.repository_owner }}/cindral:${{ steps.version.outputs.tag }} --help
